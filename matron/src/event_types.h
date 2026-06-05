@@ -4,7 +4,10 @@
 #include <sys/types.h>
 
 // lo_message is opaque here. files using it include oracle.h for the full definition.
-typedef void *lo_message;
+// mirror liblo's own typedef so translation units that include both this header
+// and <lo/lo.h> (e.g. when matron + crone are linked into one binary) don't see
+// a conflicting declaration.
+typedef struct lo_message_ *lo_message;
 
 // NOTE: new event types *must* be added to the end of the enum in the order
 // maintain ABI compatibility with compiled modules which interact with the

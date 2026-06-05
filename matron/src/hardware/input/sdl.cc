@@ -15,13 +15,16 @@ static void input_sdl_destroy(matron_io_t *io);
 static void *input_sdl_poll(void *data);
 
 input_ops_t input_sdl_ops = {
-    .io_ops.name = "input:sdl",
-    .io_ops.type = IO_INPUT,
-    .io_ops.data_size = sizeof(input_sdl_priv_t),
-    .io_ops.config = input_sdl_config,
-    .io_ops.setup = input_sdl_setup,
-    .io_ops.destroy = input_sdl_destroy,
-    .poll = input_sdl_poll,
+    {
+        // .io_ops
+        "input:sdl",               // .name
+        IO_INPUT,                  // .type
+        sizeof(input_sdl_priv_t),  // .data_size
+        input_sdl_config,          // .config
+        input_sdl_setup,           // .setup
+        input_sdl_destroy,         // .destroy
+    },
+    input_sdl_poll, // .poll
 };
 
 int input_sdl_config(matron_io_t *io, lua_State *l) {
