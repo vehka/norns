@@ -1,0 +1,31 @@
+-- Example matronrc for running norns on the desktop.
+--
+-- matron loads the first readable of:
+--   1. ~/matronrc.lua
+--   2. ~/norns/matronrc.lua   (~/norns should be the symlinked checkout = this repo)
+-- Copy this file to ~/matronrc.lua (recommended -- keeps your config out of the
+-- repo working tree).
+
+-- Desktop window. Keyboard input is handled by the screen:sdl backend while
+-- the window is focused: hold the modifier (default: alt) for the norns
+-- control grid (Alt+1/2/3 = K1/K2/K3, Alt+q/w a/s z/x = E1/E2/E3 -/+); all
+-- other keys pass through to the lua `keyboard` module for typing.
+--
+-- To customise input, uncomment the `input` table below (all fields optional;
+-- the values shown are the defaults).
+
+_boot.add_io('screen:sdl', {
+  -- input = {
+  --   modifier = 'alt',      -- norns control activator: 'alt'|'ctrl'|'gui'|'shift'|'none'
+  --   enc_step = 1,          -- steps per encoder tap
+  --   keys = {'1','2','3'},  -- K1, K2, K3
+  --   enc1 = {'q','w'},      -- E1 {down, up}
+  --   enc2 = {'a','s'},      -- E2
+  --   enc3 = {'z','x'},      -- E3
+  -- },
+})
+-- 'modifier' moves the control grid off alt (e.g. 'ctrl') so scripts can use
+-- Alt+letter via the keyboard module. 'gui' is the Super/Windows key (often
+-- grabbed by the desktop environment, so less reliable). 'none' makes the grid
+-- always active (those keys then no longer type). Key names follow SDL:
+-- 'q', '1', 'Left', 'Space', ...
