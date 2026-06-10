@@ -117,6 +117,8 @@ when running norns on desktop computers or custom hardware platforms, `matron` r
 _boot.add_io('screen:sdl', {})
 ```
 
+the SDL window takes keyboard input: hold alt for the norns controls (alt+1/2/3 = K1/K2/K3; alt+q/w, a/s, z/x = E1/E2/E3 down/up); all other keys pass through to the lua `keyboard` module as if from a HID keyboard.
+
 the lua runtime expects to find the source tree at `~/norns` (a symlink to the checkout is fine) and a `~/dust` tree for scripts and data:
 
 ```

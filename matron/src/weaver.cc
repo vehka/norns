@@ -2749,6 +2749,65 @@ void w_handle_enc(const int n, const int delta) {
     l_report(lvm, l_docall(lvm, 2, 0));
 }
 
+// sdl window keyboard passthrough (desktop): feed the Lua `keyboard` module the
+// same way evdev HID keyboards do (type EV_KEY = 1). code is a linux evdev
+// KEY_* code, value 0/1/2 = up/down/repeat.
+void w_handle_sdl_key(const int code, const int value) {
+    lua_getglobal(lvm, "keyboard");
+    if (!lua_istable(lvm, -1)) {
+        // keyboard module not loaded yet (early boot); drop the event.
+        lua_pop(lvm, 1);
+        return;
+    }
+    lua_getfield(lvm, -1, "process");
+    lua_remove(lvm, -2);
+    lua_pushinteger(lvm, 1); // EV_KEY
+    lua_pushinteger(lvm, code);
+    lua_pushinteger(lvm, value);
+    l_report(lvm, l_docall(lvm, 3, 0));
+}
+
+// sdl window encoder (desktop): one key tap = one encoder step. Dispatch
+// straight to norns.encoders.callback, bypassing encoders.process / the
+// sens+accel accumulator (the menu sets sens up to 8, so a pulse-accumulating
+// path needs many taps before it steps). screen.ping() mirrors what the
+// encoder processors do, to wake the screen on interaction.
+void w_handle_sdl_enc(const int n, const int delta) {
+    lua_getglobal(lvm, "norns");
+    if (!lua_istable(lvm, -1)) {
+        lua_pop(lvm, 1);
+        return;
+    }
+    lua_getfield(lvm, -1, "encoders");
+    lua_remove(lvm, -2);
+    if (!lua_istable(lvm, -1)) {
+        lua_pop(lvm, 1);
+        return;
+    }
+    lua_getfield(lvm, -1, "callback");
+    lua_remove(lvm, -2);
+    if (!lua_isfunction(lvm, -1)) {
+        lua_pop(lvm, 1);
+        return;
+    }
+    lua_pushinteger(lvm, n);
+    lua_pushinteger(lvm, delta);
+    l_report(lvm, l_docall(lvm, 2, 0));
+
+    lua_getglobal(lvm, "screen");
+    if (lua_istable(lvm, -1)) {
+        lua_getfield(lvm, -1, "ping");
+        lua_remove(lvm, -2);
+        if (lua_isfunction(lvm, -1)) {
+            l_report(lvm, l_docall(lvm, 0, 0));
+        } else {
+            lua_pop(lvm, 1);
+        }
+    } else {
+        lua_pop(lvm, 1);
+    }
+}
+
 // system/battery
 void w_handle_battery(const int percent, const int current) {
     lua_getglobal(lvm, "_norns");

@@ -225,6 +225,12 @@ static void handle_event(union event_data *ev) {
     case EVENT_ENC:
         w_handle_enc(ev->enc.n, ev->enc.delta);
         break;
+    case EVENT_SDL_KEY:
+        w_handle_sdl_key(ev->sdl_key.code, ev->sdl_key.value);
+        break;
+    case EVENT_SDL_ENC:
+        w_handle_sdl_enc(ev->enc.n, ev->enc.delta);
+        break;
     case EVENT_BATTERY:
         w_handle_battery(ev->battery.percent, ev->battery.current);
         break;
