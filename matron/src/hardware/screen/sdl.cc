@@ -1,9 +1,11 @@
+#include <ctype.h>
 #include <fcntl.h>
 #include <linux/input-event-codes.h>
 #include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 #include <SDL2/SDL.h>
@@ -22,8 +24,9 @@ typedef struct _screen_sdl_priv {
     bool render_running;
     bool thread_started;
 
-    // input bindings (see screen_sdl_input_defaults). grid_mod is the modifier
-    // that activates the enc/key grid.
+    // input config (set from the add_io options `input` subtable; see
+    // screen_sdl_config). grid_mod is the modifier that activates the enc/key
+    // grid; KMOD_NONE means the grid is always active (no modifier needed).
     SDL_Keymod grid_mod;
     int enc_step;            // steps per encoder tap
     SDL_Scancode key_sc[3];  // K1..K3
@@ -81,9 +84,108 @@ static void screen_sdl_input_defaults(screen_sdl_priv_t *priv) {
     priv->enc_up[2] = SDL_SCANCODE_X;
 }
 
+// Resolve a key name (e.g. "q", "1", "Left") to an SDL scancode. SDL expects
+// names like "Q"/"Left"; accept lowercase letters too by retrying uppercased.
+// Returns fallback (and warns) if the name is unknown.
+static SDL_Scancode screen_sdl_scancode_from_name(const char *name, SDL_Scancode fallback) {
+    SDL_Scancode sc = SDL_GetScancodeFromName(name);
+    if (sc == SDL_SCANCODE_UNKNOWN) {
+        char up[64];
+        size_t i = 0;
+        for (; name[i] != '\0' && i < sizeof(up) - 1; i++) {
+            up[i] = (char)toupper((unsigned char)name[i]);
+        }
+        up[i] = '\0';
+        sc = SDL_GetScancodeFromName(up);
+    }
+    if (sc == SDL_SCANCODE_UNKNOWN) {
+        fprintf(stderr, "WARN (screen:sdl) unknown key name '%s', keeping default\n", name);
+        return fallback;
+    }
+    return sc;
+}
+
+// Optionally read `input = {...}` from the add_io options table (arg 2):
+//   modifier = 'alt'|'ctrl'|'gui'|'shift'|'none'   (grid activator)
+//   enc_step = <int>                               (steps per encoder tap)
+//   keys     = {'1','2','3'}                        (K1..K3)
+//   enc1/2/3 = {'<down>','<up>'}                    (encoder rebinds)
+// Any field may be omitted; defaults match the hardware-like layout.
 int screen_sdl_config(matron_io_t *io, lua_State *l) {
-    (void)l;
-    screen_sdl_input_defaults((screen_sdl_priv_t *)io->data);
+    screen_sdl_priv_t *priv = (screen_sdl_priv_t *)io->data;
+    screen_sdl_input_defaults(priv);
+
+    if (!lua_istable(l, 2)) {
+        return 0;
+    }
+    lua_getfield(l, 2, "input");
+    if (!lua_istable(l, -1)) {
+        lua_pop(l, 1);
+        return 0;
+    }
+    int in = lua_gettop(l);
+
+    lua_getfield(l, in, "modifier");
+    if (lua_isstring(l, -1)) {
+        const char *m = lua_tostring(l, -1);
+        if (strcmp(m, "alt") == 0) {
+            priv->grid_mod = KMOD_ALT;
+        } else if (strcmp(m, "ctrl") == 0) {
+            priv->grid_mod = KMOD_CTRL;
+        } else if (strcmp(m, "gui") == 0) {
+            priv->grid_mod = KMOD_GUI;
+        } else if (strcmp(m, "shift") == 0) {
+            priv->grid_mod = KMOD_SHIFT;
+        } else if (strcmp(m, "none") == 0) {
+            priv->grid_mod = KMOD_NONE; // grid always active
+        } else {
+            fprintf(stderr, "WARN (screen:sdl) unknown modifier '%s', keeping 'alt'\n", m);
+        }
+    }
+    lua_pop(l, 1);
+
+    lua_getfield(l, in, "enc_step");
+    if (lua_isnumber(l, -1)) {
+        int s = (int)lua_tointeger(l, -1);
+        if (s >= 1 && s <= 64) {
+            priv->enc_step = s;
+        } else {
+            fprintf(stderr, "WARN (screen:sdl) enc_step %d out of range [1,64], keeping %d\n", s, priv->enc_step);
+        }
+    }
+    lua_pop(l, 1);
+
+    lua_getfield(l, in, "keys");
+    if (lua_istable(l, -1)) {
+        for (int i = 0; i < 3; i++) {
+            lua_rawgeti(l, -1, i + 1);
+            if (lua_isstring(l, -1)) {
+                priv->key_sc[i] = screen_sdl_scancode_from_name(lua_tostring(l, -1), priv->key_sc[i]);
+            }
+            lua_pop(l, 1);
+        }
+    }
+    lua_pop(l, 1);
+
+    const char *enc_field[3] = {"enc1", "enc2", "enc3"};
+    for (int i = 0; i < 3; i++) {
+        lua_getfield(l, in, enc_field[i]);
+        if (lua_istable(l, -1)) {
+            lua_rawgeti(l, -1, 1);
+            if (lua_isstring(l, -1)) {
+                priv->enc_dn[i] = screen_sdl_scancode_from_name(lua_tostring(l, -1), priv->enc_dn[i]);
+            }
+            lua_pop(l, 1);
+            lua_rawgeti(l, -1, 2);
+            if (lua_isstring(l, -1)) {
+                priv->enc_up[i] = screen_sdl_scancode_from_name(lua_tostring(l, -1), priv->enc_up[i]);
+            }
+            lua_pop(l, 1);
+        }
+        lua_pop(l, 1);
+    }
+
+    lua_pop(l, 1); // input table
     return 0;
 }
 
