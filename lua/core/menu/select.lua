@@ -28,7 +28,7 @@ local function sort_select_tree(results)
 
   local t = {}
   for filename in results:gmatch("[^\r\n]+") do
-    table.insert(t,'/home/we/dust/code/' .. filename)
+    table.insert(t,paths.code .. filename)
   end
 
   for _,file in pairs(t) do
