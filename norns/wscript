@@ -67,6 +67,7 @@ def build(bld):
     ]
 
     matron_includes = [
+        '../matron/src/compat',
         '../matron/src',
         '../matron/src/device',
         '../matron/src/hardware',
@@ -81,6 +82,7 @@ def build(bld):
         'ALSA',
         'LIBUDEV',
         'LIBEVDEV',
+        'GLIB-2.0',
         'LIBGPIOD',
         'CAIRO',
         'CAIRO-FT',
@@ -139,7 +141,9 @@ def build(bld):
     norns_includes = ['.'] + matron_includes + crone_includes
     norns_use = matron_use + crone_use
     norns_libs = norns_libs + matron_libs + crone_libs
-    norns_cxxflags = ['-O3', '-Wall', '-mfpu=neon']
+    norns_cxxflags = ['-O3', '-Wall']
+    if not bld.env.NORNS_DESKTOP:
+        norns_cxxflags += ['-mfpu=neon']
     norns_ldflags = ['-Wl,-export-dynamic']
 
     if bld.env.NORNS_PROFILE:
