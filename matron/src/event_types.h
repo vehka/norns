@@ -117,6 +117,10 @@ typedef enum {
     EVENT_TAPE_RECORD_CLOSE,
     // detached system action launch result
     EVENT_SYSTEM_CMD_DONE,
+    // sdl window keyboard passthrough (desktop) -> keyboard.process
+    EVENT_SDL_KEY,
+    // sdl window encoder (desktop) -> encoders.callback, bypassing sens/accel
+    EVENT_SDL_ENC,
 } event_t;
 
 // a data structure for twelve volume levels
@@ -276,6 +280,12 @@ struct event_enc {
     int8_t delta;
 }; // +2
 
+struct event_sdl_key {
+    struct event_common common;
+    uint16_t code; // linux evdev KEY_* code
+    int32_t value; // 0 = up, 1 = down, 2 = repeat
+}; // +8
+
 struct event_poll_value {
     struct event_common common;
     uint32_t idx;
@@ -432,6 +442,7 @@ union event_data {
     struct event_osc osc_event;
     struct event_key key;
     struct event_enc enc;
+    struct event_sdl_key sdl_key;
     struct event_battery battery;
     struct event_power power;
     struct event_stat stat;

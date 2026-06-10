@@ -1,0 +1,14 @@
+-- Example matronrc for running norns on the desktop.
+--
+-- matron loads the first readable of:
+--   1. ~/matronrc.lua
+--   2. ~/norns/matronrc.lua   (~/norns should be the symlinked checkout = this repo)
+-- Copy this file to ~/matronrc.lua (recommended -- keeps your config out of the
+-- repo working tree).
+
+-- Desktop window. Keyboard input is handled by the screen:sdl backend while
+-- the window is focused: hold alt for the norns control grid (Alt+1/2/3 =
+-- K1/K2/K3, Alt+q/w a/s z/x = E1/E2/E3 -/+); all other keys pass through to
+-- the lua `keyboard` module for typing.
+
+_boot.add_io('screen:sdl', {})

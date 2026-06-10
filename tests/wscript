@@ -737,9 +737,17 @@ def test(bld: BuildContext):
     link_libs = ["pthread"]
     uselibs = ["LUA53", "NNG", "ATOMIC"]
 
+    # desktop only: units that #include matron/src/hardware/screen/sdl.cc
+    # (the SDL window backend) need its SDL2/cairo/lua dependencies. keyed by
+    # test dir; built only under --desktop, where these uselibs are configured.
+    DESKTOP_TEST_DIRS = {"matron/screen_sdl"}
+    DESKTOP_TEST_USELIBS = ["SDL2", "CAIRO", "CAIRO-FT", "LUA53"]
+
     # collect test units
     test_units: List[TestUnit] = []
     for test_dir, test_source_files in sorted(test_dirs.items()):
+        if test_dir in DESKTOP_TEST_DIRS and not bld.env.NORNS_DESKTOP:
+            continue  # desktop-only unit; not built on Pi/non-desktop targets
         test_sources = _collect_test_sources(
             bld, tests_root, test_dir, test_source_files
         )
@@ -760,6 +768,11 @@ def test(bld: BuildContext):
             + test_sources.common_includes
         )
 
+        # desktop only: pull SDL2/cairo/lua (includes + libs) via uselibs
+        use = list(uselibs)
+        if test_dir in DESKTOP_TEST_DIRS:
+            use += [u for u in DESKTOP_TEST_USELIBS if u not in use]
+
         source = test_sources.assemble_for_build(tests_root)
 
         # build test binary with waf_unit_test feature
@@ -768,11 +781,11 @@ def test(bld: BuildContext):
             features=features,
             source=source,
             includes=includes,
+            use=use,
             cflags=build_config.cflags,
             cxxflags=build_config.cxxflags,
             defines=build_config.defines,
             lib=link_libs,
-            use=uselibs,
         )
 
     # store test units for validation hook

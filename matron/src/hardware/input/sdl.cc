@@ -43,84 +43,9 @@ void input_sdl_destroy(matron_io_t *io) {
 
 static void *input_sdl_poll(void *data) {
     (void)data;
-    // for now, we don't actually want to use keyboard input
-    // (leave it for scripts / menu)
-#if 0
-    SDL_Event event;
-    union event_data *ev;
-    fprintf(stderr, "starting SDL input loop\n"); 
-    while (true) {
-        SDL_WaitEvent(&event);
-        fprintf(stderr, "got SDL input %d\n", event.type);
-        switch (event.type) {
-            case SDL_KEYDOWN:
-            case SDL_KEYUP: {
-                fprintf(stderr, "key event\n");
-                int z = event.type == SDL_KEYDOWN ? 1 : 0;
-                switch (event.key.keysym.sym) {
-                    case SDL_SCANCODE_Q:
-                        ev = event_data_new(EVENT_KEY);
-                        ev->key.n = 0;
-                        ev->key.val = z;
-                        event_post(ev);
-                        break;
-                    case SDL_SCANCODE_A:
-                        ev = event_data_new(EVENT_KEY);
-                        ev->key.n = 1;
-                        ev->key.val = z;
-                        event_post(ev);
-                        break;
-                    case SDL_SCANCODE_Z:
-                        ev = event_data_new(EVENT_KEY);
-                        ev->key.n = 2;
-                        ev->key.val = z;
-                        event_post(ev);
-                        break;
-                    case SDL_SCANCODE_W:
-                        ev = event_data_new(EVENT_ENC);
-                        ev->enc.n = 0;
-                        ev->enc.delta = -1;
-                        event_post(ev);
-                        break;
-                    case SDL_SCANCODE_E:
-                        ev = event_data_new(EVENT_ENC);
-                        ev->enc.n = 0;
-                        ev->enc.delta = 1;
-                        event_post(ev);
-                        break;
-                    case SDL_SCANCODE_S:
-                        ev = event_data_new(EVENT_ENC);
-                        ev->enc.n = 1;
-                        ev->enc.delta = -1;
-                        event_post(ev);
-                        break;
-                    case SDL_SCANCODE_D:
-                        ev = event_data_new(EVENT_ENC);
-                        ev->enc.n = 1;
-                        ev->enc.delta = 1;
-                        event_post(ev);
-                        break;
-                    case SDL_SCANCODE_X:
-                        ev = event_data_new(EVENT_ENC);
-                        ev->enc.n = 2;
-                        ev->enc.delta = -1;
-                        event_post(ev);
-                        break;
-                    case SDL_SCANCODE_C:
-                        ev = event_data_new(EVENT_ENC);
-                        ev->enc.n = 2;
-                        ev->enc.delta = 1;
-                        event_post(ev);
-                        break;
-                    default:
-                        break;
-                }
-                break;
-            }
-            default:
-                break;
-        }
-    }
-#endif
+    // No-op: SDL keyboard events must be pumped on the thread that owns the SDL
+    // window, so input is handled in the screen render loop instead
+    // (matron/src/hardware/screen/sdl.cc, screen_sdl_handle_key). This IO is
+    // kept only so `_boot.add_io('input:sdl', {})` still resolves.
     return NULL;
 }
