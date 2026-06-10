@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <doctest/doctest.h>
 #include <thread>
 
@@ -11,8 +12,8 @@
 
 void clock_internal_test_enable_threadless(bool enable);
 void clock_internal_test_tick_once();
-void clock_internal_test_set_ticks(unsigned long long v);
-unsigned long long clock_internal_test_get_published_ticks(void);
+void clock_internal_test_set_ticks(uint64_t v);
+uint64_t clock_internal_test_get_published_ticks(void);
 void clock_internal_test_reset_published_ticks(void);
 void clock_internal_test_stop_thread(void);
 double clock_internal_test_get_last_sleep_s(void);
