@@ -1,3 +1,4 @@
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -8,7 +9,7 @@
 //--- types and variables
 
 static void post_command_capture(const char *cmd, void *ctx, const char *response_buff, size_t response_size) {
-    int cb_ref = (int)ctx;
+    int cb_ref = (int)(intptr_t)ctx;
 
     if (response_size == 0) {
         fprintf(stderr, "system_cmd: command (%s) failed\n", cmd);
@@ -31,5 +32,5 @@ static void post_command_capture(const char *cmd, void *ctx, const char *respons
 //-- extern function definitions
 
 bool system_cmd(const char *cmd, int cb_ref) {
-    return sidecar_client_cmd_async(cmd, (void *)cb_ref, post_command_capture);
+    return sidecar_client_cmd_async(cmd, (void *)(intptr_t)cb_ref, post_command_capture);
 }
