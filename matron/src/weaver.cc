@@ -392,9 +392,11 @@ static void lua_register_norns_class(const char *class_name, const luaL_Reg *met
 
 static void lua_register_cjson() {
 #if HAVE_LUA_CJSON
-    luaopen_cjson(lvm);
+    // luaL_requiref puts the module in package.loaded['cjson'] so require('cjson') works
+    luaL_requiref(lvm, "cjson", luaopen_cjson, 0);
     lua_pushvalue(lvm, -1);
     lua_setglobal(lvm, "_json");
+    lua_pop(lvm, 1);
 #endif
 }
 
