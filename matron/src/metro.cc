@@ -138,7 +138,14 @@ void metro_init(struct metro *t, uint64_t nsec, int count) {
     }
 
     // set other thread attributes here...
-    res = pthread_attr_setstacksize(&attr, PTHREAD_STACK_MIN);
+    // NB: glibc >= 2.34 reserves TLS space on top of the requested stack, so
+    // creating a thread with a stack of exactly PTHREAD_STACK_MIN fails with
+    // EINVAL on modern (desktop) systems. Use a small floor above the minimum.
+    size_t stacksize = PTHREAD_STACK_MIN;
+    if (stacksize < 128 * 1024) {
+        stacksize = 128 * 1024;
+    }
+    res = pthread_attr_setstacksize(&attr, stacksize);
     if (res != 0) {
         metro_handle_error(res, "pthread_attr_init");
         return;
