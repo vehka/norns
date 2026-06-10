@@ -188,6 +188,8 @@ def _setup_includes_and_flags(bld: BuildContext) -> TestRunnerConfig:
         _abs("../third-party/readerwriterqueue", bld),
         _abs("../third-party/concurrentqueue", bld),
         _abs("../tests/common", bld),
+        # lua extern-C compat shim first (see norns/wscript)
+        _abs("../matron/src/compat", bld),
         _abs("../matron/src", bld),
         _abs("../crone/src", bld),
         _abs("../crone", bld),
