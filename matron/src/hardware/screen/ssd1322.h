@@ -1,19 +1,26 @@
 #pragma once
 
-#include <arm_neon.h>
 #include <cairo.h>
+#include <math.h>
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+
+// Pi-only hardware headers (SPI/GPIO/NEON). On desktop/headless builds the
+// physical SSD1322 OLED is absent and these (notably <arm_neon.h>) do not
+// exist on non-ARM hosts, so the driver is stubbed out -- see ssd1322.cc.
+#ifndef NORNS_DESKTOP
+#include <arm_neon.h>
 #include <fcntl.h>
 #include <gpiod.h>
 #include <linux/gpio.h>
 #include <linux/spi/spidev.h>
 #include <linux/types.h>
-#include <math.h>
 #include <pthread.h>
-#include <stdarg.h>
-#include <stdint.h>
-#include <stdio.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#endif
 
 #include "platform.h"
 
