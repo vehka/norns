@@ -5,6 +5,66 @@
 #include "event_types.h"
 #include "events.h"
 
+#ifdef NORNS_DESKTOP
+
+#include <pthread.h>
+#include <time.h>
+
+// Desktop/headless build: no physical SSD1322 OLED. Provide no-op stubs so
+// screen.cc and main.cc (which call these unconditionally) still link. The
+// actual on-screen display is handled by the SDL screen backend.
+//
+// On hardware the ssd1322 refresh thread is what posts EVENT_SCREEN_REFRESH at
+// 60Hz, which drives the script/menu redraw loop. Keep that heartbeat here so
+// the display still updates on desktop (and so a headless build still services
+// redraw callbacks).
+
+static pthread_t refresh_thread;
+static bool refresh_running = false;
+
+static void *ssd1322_refresh_loop(void *p) {
+    (void)p;
+    static struct timespec ts = {
+        .tv_sec = 0,
+        .tv_nsec = 16666666, // 60Hz
+    };
+    while (refresh_running) {
+        event_post(event_data_new(EVENT_SCREEN_REFRESH));
+        clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
+    }
+    return NULL;
+}
+
+void ssd1322_init() {
+    refresh_running = true;
+    if (pthread_create(&refresh_thread, NULL, &ssd1322_refresh_loop, NULL) != 0) {
+        fprintf(stderr, "(screen) failed to start desktop refresh thread\n");
+        refresh_running = false;
+    }
+}
+void ssd1322_deinit() {
+    if (refresh_running) {
+        refresh_running = false;
+        pthread_join(refresh_thread, NULL);
+    }
+}
+void ssd1322_refresh() {}
+void ssd1322_update(cairo_surface_t *surface, bool should_translate_color) {
+    (void)surface;
+    (void)should_translate_color;
+}
+void ssd1322_set_brightness(uint8_t b) { (void)b; }
+void ssd1322_set_contrast(uint8_t c) { (void)c; }
+void ssd1322_set_display_mode(ssd1322_display_mode_t mode) { (void)mode; }
+void ssd1322_set_gamma(double g) { (void)g; }
+void ssd1322_set_refresh_rate(uint8_t hz) { (void)hz; }
+uint8_t *ssd1322_resize_buffer(size_t size) {
+    (void)size;
+    return NULL;
+}
+
+#else
+
 static int spidev_fd = 0;
 static bool display_dirty = false;
 static bool should_translate_color = false;
@@ -425,3 +485,5 @@ uint8_t *ssd1322_resize_buffer(size_t size) {
 #undef NUMARGS
 #undef write_command
 #undef write_command_with_data
+
+#endif // NORNS_DESKTOP
