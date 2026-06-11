@@ -7,7 +7,7 @@
 these can be installed from the default Debian repositories: 
 
 ```
-sudo apt-get install libevdev-dev liblo-dev libudev-dev libcairo2-dev liblua5.3-dev libavahi-compat-libdnssd-dev libasound2-dev libncurses5-dev libncursesw5-dev libsndfile1-dev libjack-dev libnng-dev
+sudo apt-get install libevdev-dev liblo-dev libudev-dev libcairo2-dev liblua5.3-dev libavahi-compat-libdnssd-dev libasound2-dev libncurses5-dev libncursesw5-dev libsndfile1-dev libjack-dev libnng-dev libglib2.0-dev
 ```
 
 ### other packages / sources
@@ -110,7 +110,31 @@ execute with `./maiden.arm -debug -site ./app/build -data ~/norns/lua/`
 
 ## launching on desktop / other platforms:
 
-when running norns on desktop computers or custom hardware platforms, you will want to provide `matron` with appropriate runtime configuration options using the `matronrc.lua` file. this should be copied to the user's home directory and customized there. see the comments in that file.
+when running norns on desktop computers or custom hardware platforms, `matron` reads its runtime configuration from `~/matronrc.lua` (the repo's own `matronrc.lua` holds the norns hardware defaults and is not suitable for desktop). the minimal desktop config just opens the SDL screen window:
+
+```lua
+-- ~/matronrc.lua
+_boot.add_io('screen:sdl', {})
+```
+
+the lua runtime expects to find the source tree at `~/norns` (a symlink to the checkout is fine) and a `~/dust` tree for scripts and data:
+
+```
+ln -s /path/to/norns ~/norns
+mkdir -p ~/dust/code ~/dust/data ~/dust/audio/tape
+```
+
+launch order matters: sclang must be running — and own its default OSC port 57120 — before norns starts, or the supercollider handshake will time out. with JACK running:
+
+- 1. `sclang`
+- 2. `build/norns/norns`
+
+to use maiden or `maiden-repl`, launch each under `ws-wrapper` instead, which exposes their REPLs over websockets:
+
+```
+build/ws-wrapper/ws-wrapper ws://0.0.0.0:5556 sclang
+build/ws-wrapper/ws-wrapper ws://0.0.0.0:5555 build/norns/norns
+```
 
 ## docs
 
