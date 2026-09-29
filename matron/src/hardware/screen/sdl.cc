@@ -423,6 +423,9 @@ static void screen_sdl_handle_key(const screen_sdl_priv_t *priv, const SDL_Keybo
 static void *screen_sdl_render_loop(void *data) {
     screen_sdl_priv_t *priv = (screen_sdl_priv_t *)data;
 
+    // SDL would otherwise install SIGINT/SIGTERM handlers that just queue an
+    // SDL_QUIT event, which swallows the SIGTERM _norns.terminate() relies on
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "ERROR (screen:sdl) SDL_Init failed: %s\n", SDL_GetError());
         priv->render_running = false;
