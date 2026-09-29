@@ -192,7 +192,12 @@ norns.shutdown = function()
   pcall(cleanup)
   audio.level_dac(0)
   audio.headphone_gain(0)
-  _norns.execute("sleep 0.5; sudo shutdown now")
+  if norns.is_desktop then
+    -- not a dedicated device: just exit norns, don't power off the host
+    _norns.terminate()
+  else
+    _norns.execute("sleep 0.5; sudo shutdown now")
+  end
 end
 
 --- platform detection
@@ -207,6 +212,12 @@ norns.is_norns = _norns.platform_factory()
 
 --- true if we are running on norns shield (PI3, PI4)
 norns.is_shield = _norns.platform_shield()
+
+--- true if we are not on a raspberry pi (e.g. the x86 desktop build)
+norns.is_desktop = norns.platform < 2
+
+-- on the desktop, RESTART signals the launcher through this file
+norns.desktop_restart_flag = (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/norns-desktop.restart"
 
 --- run an external command
 -- @tparam string cmd shell command to execute
@@ -225,6 +236,14 @@ norns.system_glob = _norns.system_glob
 
 -- system reset (restart sclang + self-terminate for systemd relaunch)
 _norns.reset = function()
+  if norns.is_desktop then
+    -- no systemd units on the desktop: leave a flag for the launcher
+    -- (norns-desktop) to relaunch sclang + norns, then exit
+    local f = io.open(norns.desktop_restart_flag, "w")
+    if f then f:close() end
+    _norns.terminate()
+    return
+  end
   -- restart sclang first (synchronous via sidecar, completes before we die)
   _norns.execute("sudo systemctl restart norns-sclang.service")
   -- self-terminate
