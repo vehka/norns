@@ -51,6 +51,11 @@ union dev *dev_new(device_t type, const char *path, const char *name, bool multi
             goto err_init;
         }
         break;
+    case DEV_TYPE_MIDI_SEQ:
+        if (dev_midi_seq_init(d) < 0) {
+            goto err_init;
+        }
+        break;
     case DEV_TYPE_CROW:
         if (dev_crow_init(d) < 0) {
             goto err_init;
