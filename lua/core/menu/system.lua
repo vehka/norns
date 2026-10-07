@@ -36,7 +36,20 @@ m.redraw = function()
   screen.update()
 end
 
-m.init = norns.none
+m.init = function()
+  -- BLUETOOTH is listed only when there is a controller
+  local i = tab.key(m.pages, "BLUETOOTH")
+  if bluetooth.available() then
+    if i == nil then
+      table.insert(m.list, 3, "BLUETOOTH >")
+      table.insert(m.pages, 3, "BLUETOOTH")
+    end
+  elseif i ~= nil then
+    table.remove(m.list, i)
+    table.remove(m.pages, i)
+    m.pos = util.clamp(m.pos, 1, #m.list)
+  end
+end
 m.deinit = norns.none
 
 m.passdone = function(txt)
