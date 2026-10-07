@@ -27,6 +27,8 @@ Bluetooth.connected = {}
 
 -- true while a scan or connect is running; they set the status themselves
 local busy = false
+-- true while the background wiring timer runs
+local wiring = false
 
 --
 -- common functions
@@ -121,16 +123,32 @@ function Bluetooth.wire(output)
   end
 end
 
---- start wiring devices in the background, so that a device that
--- reconnects by itself gets wired without the menu page being open.
-function Bluetooth.init()
-  if not Bluetooth.available() then return end
+-- wire devices in the background, so that a device that reconnects by
+-- itself gets wired without the menu page being open.
+local function start_wiring()
+  if wiring then return end
+  wiring = true
   wire_timer.time = WIRE_SECONDS
   wire_timer.count = -1
   wire_timer.event = function()
     norns.system_cmd("aconnect -l", Bluetooth.wire)
   end
   wire_timer:start()
+end
+
+local function stop_wiring()
+  if not wiring then return end
+  wiring = false
+  wire_timer:stop()
+end
+
+--- start background wiring if bluetoothd already knows a device.
+-- nothing runs until a device has been connected.
+function Bluetooth.init()
+  if not Bluetooth.available() then return end
+  norns.system_cmd("timeout 5 bluetoothctl devices", function(output)
+    if #parse_devices(output) > 0 then start_wiring() end
+  end)
 end
 
 --- refresh the device list and the connected midi ports.
@@ -186,7 +204,11 @@ function Bluetooth.connect(name, callback)
     local ok = output:find("Connection successful", 1, true) ~= nil
     busy = false
     Bluetooth.update()
-    if not ok then Bluetooth.status = "failed" end
+    if ok then
+      start_wiring()
+    else
+      Bluetooth.status = "failed"
+    end
     if callback then callback(ok) end
   end)
 end
@@ -210,6 +232,7 @@ function Bluetooth.forget(name)
   _norns.execute("bluetoothctl disconnect " .. d.addr)
   _norns.execute("bluetoothctl remove " .. d.addr)
   Bluetooth.update()
+  if #Bluetooth.devices == 0 then stop_wiring() end
 end
 
 --- names of the known devices.
