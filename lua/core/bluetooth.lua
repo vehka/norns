@@ -14,6 +14,10 @@ local Bluetooth = {}
 local SCAN_SECONDS = 8
 local VIRTUAL_PORT = "Virtual RawMIDI"
 local BLUETOOTH_SUFFIX = " Bluetooth"
+local WIRE_SECONDS = 5
+
+-- 33 is one of the metros reserved for the system
+local wire_timer = metro[33]
 
 Bluetooth.status = "unavailable"
 -- devices known to bluetoothd: list of {addr=, name=}
@@ -44,20 +48,32 @@ local function parse_ports(output)
   local virtual = nil
   local ports = {}
   local client = nil
+  local port = nil
   for line in output:gmatch("[^\n]+") do
     local c = line:match("^client (%d+):")
+    local to = line:match("^%s+Connecting To: (.+)")
+    local from = line:match("^%s+Connected From: (.+)")
     if c then
       client = c
+      port = nil
+    elseif to and port then
+      port.to = to
+    elseif from and port then
+      port.from = from
     else
       local p, name = line:match("^%s+(%d+) '(.-)%s*'")
+      port = nil
       if p and client then
         if name == VIRTUAL_PORT then
           virtual = client .. ":" .. p
         elseif name:sub(-#BLUETOOTH_SUFFIX) == BLUETOOTH_SUFFIX then
-          table.insert(ports, {
+          port = {
             id = client .. ":" .. p,
-            name = name:sub(1, -#BLUETOOTH_SUFFIX - 1)
-          })
+            name = name:sub(1, -#BLUETOOTH_SUFFIX - 1),
+            to = "",
+            from = ""
+          }
+          table.insert(ports, port)
         end
       end
     end
@@ -96,9 +112,25 @@ function Bluetooth.wire(output)
   Bluetooth.connected = names(ports)
   if virtual == nil then return end
   for _, port in ipairs(ports) do
-    _norns.execute("aconnect " .. port.id .. " " .. virtual .. " 2>/dev/null")
-    _norns.execute("aconnect " .. virtual .. " " .. port.id .. " 2>/dev/null")
+    if not port.to:find(virtual, 1, true) then
+      _norns.execute("aconnect " .. port.id .. " " .. virtual .. " 2>/dev/null")
+    end
+    if not port.from:find(virtual, 1, true) then
+      _norns.execute("aconnect " .. virtual .. " " .. port.id .. " 2>/dev/null")
+    end
   end
+end
+
+--- start wiring devices in the background, so that a device that
+-- reconnects by itself gets wired without the menu page being open.
+function Bluetooth.init()
+  if not Bluetooth.available() then return end
+  wire_timer.time = WIRE_SECONDS
+  wire_timer.count = -1
+  wire_timer.event = function()
+    norns.system_cmd("aconnect -l", Bluetooth.wire)
+  end
+  wire_timer:start()
 end
 
 --- refresh the device list and the connected midi ports.

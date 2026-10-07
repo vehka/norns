@@ -89,6 +89,7 @@ _norns.startup_status.ok = function()
   -- report engines
   _norns.report_engines()
   wifi.init()
+  bluetooth.init()
 end
 
 _norns.startup_status.timeout = function()
