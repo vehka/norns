@@ -16,14 +16,14 @@ end
 
 m.disconnect = function(x)
   if x ~= "cancel" then
-    bluetooth.disconnect(x)
+    bluetooth.disconnect(x, function() _menu.redraw() end)
   end
   _menu.redraw()
 end
 
 m.del = function(x)
   if x ~= "cancel" then
-    bluetooth.forget(x)
+    bluetooth.forget(x, function() _menu.redraw() end)
   end
   _menu.redraw()
 end
@@ -61,7 +61,8 @@ m.redraw = function()
   screen.move(0,20)
   screen.text("FOUND: " .. #bluetooth.devices)
   screen.move(0,30)
-  screen.text("MIDI: " .. table.concat(bluetooth.connected, ", "))
+  local midi = "MIDI: " .. table.concat(bluetooth.connected, ", ")
+  screen.text(util.trim_string_to_width(midi, 128))
 
   local xp = {0,26,68,104}
   for i=1,m.len do
@@ -80,12 +81,11 @@ end
 
 m.init = function()
   bluetooth.on()
-  bluetooth.update()
+  bluetooth.update(function() _menu.redraw() end)
   _menu.timer.time = 3
   _menu.timer.count = -1
   _menu.timer.event = function()
-    bluetooth.update()
-    _menu.redraw()
+    bluetooth.update(function() _menu.redraw() end)
   end
   _menu.timer:start()
 end
