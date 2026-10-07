@@ -1,9 +1,9 @@
 --- bluetooth midi
 --
 -- wrapper over `bluetoothctl` and `aconnect`. a connected BLE MIDI device
--- shows up as an ALSA sequencer port owned by bluetoothd; that port is
--- wired to matron's "virtual" midi device, so all bluetooth devices share
--- the `virtual` entry in SYSTEM > DEVICES > MIDI.
+-- shows up as an ALSA sequencer port owned by bluetoothd; a midi device
+-- connected to that port is added for it, so it is listed by name in
+-- SYSTEM > DEVICES > MIDI.
 --
 -- @module bluetooth
 
@@ -12,7 +12,8 @@ local util = require "util"
 local Bluetooth = {}
 
 local SCAN_SECONDS = 8
-local VIRTUAL_PORT = "Virtual RawMIDI"
+-- bluetoothctl waits forever if bluetoothd does not answer
+local CTL = "timeout 5 bluetoothctl "
 local BLUETOOTH_SUFFIX = " Bluetooth"
 local WIRE_SECONDS = 5
 
@@ -29,6 +30,8 @@ Bluetooth.connected = {}
 local busy = false
 -- true while the background wiring timer runs
 local wiring = false
+-- midi devices added so far: sequencer address -> {name=, idle=}
+local wired = {}
 
 --
 -- common functions
@@ -45,42 +48,32 @@ local function parse_devices(output)
   return devices
 end
 
--- parse `aconnect -l` into the virtual port and the bluetooth midi ports
+-- parse `aconnect -l` into the list of bluetooth midi ports
 local function parse_ports(output)
-  local virtual = nil
   local ports = {}
   local client = nil
   local port = nil
   for line in output:gmatch("[^\n]+") do
     local c = line:match("^client (%d+):")
-    local to = line:match("^%s+Connecting To: (.+)")
-    local from = line:match("^%s+Connected From: (.+)")
     if c then
       client = c
       port = nil
-    elseif to and port then
-      port.to = to
-    elseif from and port then
-      port.from = from
+    elseif line:match("^%s+Connecting To: ") or line:match("^%s+Connected From: ") then
+      if port then port.idle = false end
     else
       local p, name = line:match("^%s+(%d+) '(.-)%s*'")
       port = nil
-      if p and client then
-        if name == VIRTUAL_PORT then
-          virtual = client .. ":" .. p
-        elseif name:sub(-#BLUETOOTH_SUFFIX) == BLUETOOTH_SUFFIX then
-          port = {
-            id = client .. ":" .. p,
-            name = name:sub(1, -#BLUETOOTH_SUFFIX - 1),
-            to = "",
-            from = ""
-          }
-          table.insert(ports, port)
-        end
+      if p and client and name:sub(-#BLUETOOTH_SUFFIX) == BLUETOOTH_SUFFIX then
+        port = {
+          id = client .. ":" .. p,
+          name = name:sub(1, -#BLUETOOTH_SUFFIX - 1),
+          idle = true
+        }
+        table.insert(ports, port)
       end
     end
   end
-  return virtual, ports
+  return ports
 end
 
 local function find(name)
@@ -105,20 +98,34 @@ function Bluetooth.available()
   return util.os_capture("ls /sys/class/bluetooth 2>/dev/null") ~= ""
 end
 
---- wire every bluetooth midi port to the virtual midi device, both ways.
--- existing connections are left alone.
+--- add a midi device for every bluetooth midi port, and remove the
+-- devices whose port is gone.
 -- @tparam ?string output output of `aconnect -l`, fetched if omitted
 function Bluetooth.wire(output)
   output = output or util.os_capture("aconnect -l", true)
-  local virtual, ports = parse_ports(output)
+  local ports = parse_ports(output)
   Bluetooth.connected = names(ports)
-  if virtual == nil then return end
+  local seen = {}
   for _, port in ipairs(ports) do
-    if not port.to:find(virtual, 1, true) then
-      _norns.execute("aconnect " .. port.id .. " " .. virtual .. " 2>/dev/null")
+    local w = wired[port.id]
+    -- a port that reappears at the same address has lost its connections.
+    -- wait for a second look: this listing may predate the connection
+    if w and (w.name ~= port.name or (port.idle and w.idle)) then
+      _norns.midi_seq_disconnect(port.id)
+      w = nil
     end
-    if not port.from:find(virtual, 1, true) then
-      _norns.execute("aconnect " .. virtual .. " " .. port.id .. " 2>/dev/null")
+    if w == nil then
+      _norns.midi_seq_connect(port.name, port.id)
+      wired[port.id] = {name = port.name, idle = false}
+    else
+      w.idle = port.idle
+    end
+    seen[port.id] = true
+  end
+  for id, _ in pairs(wired) do
+    if not seen[id] then
+      _norns.midi_seq_disconnect(id)
+      wired[id] = nil
     end
   end
 end
@@ -146,64 +153,82 @@ end
 -- nothing runs until a device has been connected.
 function Bluetooth.init()
   if not Bluetooth.available() then return end
-  norns.system_cmd("timeout 5 bluetoothctl devices", function(output)
+  norns.system_cmd(CTL .. "devices", function(output)
     if #parse_devices(output) > 0 then start_wiring() end
   end)
 end
 
---- refresh the device list and the connected midi ports.
-function Bluetooth.update()
-  if not Bluetooth.available() then
+-- take in the output of `bluetoothctl devices` and `aconnect -l`.
+-- empty output means there is no controller
+local function refresh(output)
+  if output == "" then
     Bluetooth.status = "unavailable"
     Bluetooth.devices = {}
     Bluetooth.connected = {}
     return
   end
-  Bluetooth.devices = parse_devices(util.os_capture("bluetoothctl devices", true))
-  Bluetooth.wire()
+  Bluetooth.devices = parse_devices(output)
+  Bluetooth.wire(output)
   if not busy then
     Bluetooth.status = #Bluetooth.connected > 0 and "connected" or "ready"
   end
 end
 
+-- run a command, then refresh from the listings it leaves behind
+local function run(cmd, callback)
+  cmd = "[ -n \"$(ls /sys/class/bluetooth 2>/dev/null)\" ] && { "
+    .. (cmd or "") .. CTL .. "devices; aconnect -l; }"
+  norns.system_cmd(cmd, function(output)
+    if callback then callback(output) else refresh(output) end
+  end)
+end
+
+--- refresh the device list and the connected midi ports.
+-- @tparam ?func callback called when done
+function Bluetooth.update(callback)
+  run(nil, function(output)
+    refresh(output)
+    if callback then callback() end
+  end)
+end
+
 --- power the controller on.
 function Bluetooth.on()
-  _norns.execute("bluetoothctl power on")
+  norns.system_cmd(CTL .. "power on", function() end)
 end
 
 --- scan for devices.
 -- @tparam ?func callback called with the list of device names when done
 function Bluetooth.scan(callback)
+  if busy then return end
   Bluetooth.status = "scanning..."
   busy = true
-  local cmd = "bluetoothctl --timeout " .. SCAN_SECONDS .. " scan on >/dev/null;"
-    .. " bluetoothctl devices"
-  norns.system_cmd(cmd, function(output)
-    Bluetooth.devices = parse_devices(output)
+  local cmd = "bluetoothctl --timeout " .. SCAN_SECONDS .. " scan on >/dev/null; "
+  run(cmd, function(output)
     busy = false
-    Bluetooth.update()
+    refresh(output)
     if callback then callback(Bluetooth.device_names()) end
   end)
 end
 
---- connect a device and wire its midi port.
+--- connect a device and add its midi device.
 -- @tparam string name device name, as listed by device_names
 -- @tparam ?func callback called with true or false when done
 function Bluetooth.connect(name, callback)
   local d = find(name)
-  if d == nil then return end
+  if d == nil or busy then return end
   Bluetooth.status = "connecting..."
   busy = true
   -- a device found by an earlier scan may have expired; scan once and retry.
   -- the midi port appears shortly after the connection.
-  local connect = "bluetoothctl connect " .. d.addr
+  local connect = "timeout 30 bluetoothctl connect " .. d.addr
   local cmd = "o=$(" .. connect .. "); case \"$o\" in *successful*) ;; *)"
     .. " bluetoothctl --timeout " .. SCAN_SECONDS .. " scan on >/dev/null;"
-    .. " o=$(" .. connect .. ");; esac; echo \"$o\"; sleep 2; aconnect -l"
-  norns.system_cmd(cmd, function(output)
+    .. " o=$(" .. connect .. ");; esac; echo \"$o\"; sleep 2; "
+  run(cmd, function(output)
     local ok = output:find("Connection successful", 1, true) ~= nil
     busy = false
-    Bluetooth.update()
+    refresh(output)
     if ok then
       start_wiring()
     else
@@ -215,24 +240,31 @@ end
 
 --- disconnect a device.
 -- @tparam string name device name
-function Bluetooth.disconnect(name)
+-- @tparam ?func callback called when done
+function Bluetooth.disconnect(name, callback)
   local d = find(name)
   if d == nil then return end
-  _norns.execute("bluetoothctl disconnect " .. d.addr)
-  Bluetooth.update()
+  run(CTL .. "disconnect " .. d.addr .. " >/dev/null; ", function(output)
+    refresh(output)
+    if callback then callback() end
+  end)
 end
 
 --- forget a device.
 -- @tparam string name device name
-function Bluetooth.forget(name)
+-- @tparam ?func callback called when done
+function Bluetooth.forget(name, callback)
   local d = find(name)
   if d == nil then return end
   -- disconnect first: removing a connected device leaves it on the
   -- controller's auto-connect list, and it comes back by itself
-  _norns.execute("bluetoothctl disconnect " .. d.addr)
-  _norns.execute("bluetoothctl remove " .. d.addr)
-  Bluetooth.update()
-  if #Bluetooth.devices == 0 then stop_wiring() end
+  local cmd = CTL .. "disconnect " .. d.addr .. " >/dev/null; "
+    .. CTL .. "remove " .. d.addr .. " >/dev/null; "
+  run(cmd, function(output)
+    refresh(output)
+    if #Bluetooth.devices == 0 then stop_wiring() end
+    if callback then callback() end
+  end)
 end
 
 --- names of the known devices.
