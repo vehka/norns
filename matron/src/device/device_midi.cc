@@ -10,6 +10,7 @@
 #include "device_midi.h"
 
 #define DEV_MIDI_INPUT_BUFFER_SIZE 128
+#define DEV_MIDI_SEQ_BUFFER_SIZE 256
 
 unsigned int dev_midi_port_count(const char *path) {
     int card;
@@ -128,6 +129,67 @@ int dev_midi_virtual_init(void *self) {
     return 0;
 }
 
+static void *dev_midi_seq_start(void *self);
+
+// open a sequencer client with one port and connect it, both ways, to the
+// sequencer port given as "client:port" in the device path
+int dev_midi_seq_init(void *self) {
+    struct dev_midi *midi = (struct dev_midi *)self;
+    struct dev_common *base = (struct dev_common *)self;
+
+    int client;
+    int port;
+
+    if (sscanf(base->path, "%d:%d", &client, &port) != 2) {
+        fprintf(stderr, "bad alsa sequencer address: %s\n", base->path);
+        return -1;
+    }
+
+    if (snd_seq_open(&midi->seq, "default", SND_SEQ_OPEN_DUPLEX, 0) < 0) {
+        fprintf(stderr, "failed to open alsa sequencer.\n");
+        return -1;
+    }
+    snd_seq_set_client_name(midi->seq, base->name);
+
+    midi->seq_port = snd_seq_create_simple_port(
+        midi->seq, base->name,
+        SND_SEQ_PORT_CAP_READ | SND_SEQ_PORT_CAP_SUBS_READ | SND_SEQ_PORT_CAP_WRITE | SND_SEQ_PORT_CAP_SUBS_WRITE,
+        SND_SEQ_PORT_TYPE_MIDI_GENERIC | SND_SEQ_PORT_TYPE_APPLICATION);
+    if (midi->seq_port < 0) {
+        fprintf(stderr, "failed to create alsa sequencer port.\n");
+        goto err;
+    }
+
+    // a port may be input-only or output-only
+    {
+        int from = snd_seq_connect_from(midi->seq, midi->seq_port, client, port);
+        int to = snd_seq_connect_to(midi->seq, midi->seq_port, client, port);
+        if (from < 0 && to < 0) {
+            fprintf(stderr, "failed to connect to alsa sequencer port %s\n", base->path);
+            goto err;
+        }
+    }
+
+    if (snd_midi_event_new(DEV_MIDI_SEQ_BUFFER_SIZE, &midi->seq_encoder) < 0 ||
+        snd_midi_event_new(DEV_MIDI_SEQ_BUFFER_SIZE, &midi->seq_decoder) < 0) {
+        fprintf(stderr, "failed to allocate alsa midi event coders.\n");
+        goto err;
+    }
+    // the input parser wants a status byte on every message
+    snd_midi_event_no_status(midi->seq_decoder, 1);
+
+    base->start = &dev_midi_seq_start;
+    base->deinit = &dev_midi_deinit;
+
+    midi->clock_enabled = true;
+
+    return 0;
+
+err:
+    dev_midi_deinit(self);
+    return -1;
+}
+
 void dev_midi_deinit(void *self) {
     struct dev_midi *midi = (struct dev_midi *)self;
     // struct dev_common *base = (struct dev_common *)self;
@@ -140,6 +202,15 @@ void dev_midi_deinit(void *self) {
     }
     if (midi->handle_out != NULL) {
         snd_rawmidi_close(midi->handle_out);
+    }
+    if (midi->seq_encoder != NULL) {
+        snd_midi_event_free(midi->seq_encoder);
+    }
+    if (midi->seq_decoder != NULL) {
+        snd_midi_event_free(midi->seq_decoder);
+    }
+    if (midi->seq != NULL) {
+        snd_seq_close(midi->seq);
     }
 }
 
@@ -345,8 +416,77 @@ void *dev_midi_start(void *self) {
     return NULL;
 }
 
+void *dev_midi_seq_start(void *self) {
+    struct dev_midi *midi = (struct dev_midi *)self;
+    struct dev_common *base = (struct dev_common *)self;
+
+    midi_input_state_t state = {};
+    snd_seq_event_t *ev;
+    int err;
+
+    while (true) {
+        err = snd_seq_event_input(midi->seq, &ev);
+        if (err == -ENOSPC) {
+            fprintf(stderr, "input overrun for midi device: %s\n", base->name);
+            continue;
+        }
+        if (err < 0) {
+            break;
+        }
+
+        if (ev->type == SND_SEQ_EVENT_SYSEX) {
+            // sysex has no length limit; feed it through in buffer-sized pieces
+            uint8_t *data = (uint8_t *)ev->data.ext.ptr;
+            size_t left = ev->data.ext.len;
+            while (left > 0) {
+                size_t n = left < DEV_MIDI_INPUT_BUFFER_SIZE ? left : DEV_MIDI_INPUT_BUFFER_SIZE;
+                memcpy(state.buffer, data, n);
+                dev_midi_consume_buffer(&state, n, midi);
+                data += n;
+                left -= n;
+            }
+        } else {
+            // events that are not midi (port subscriptions &c) decode to nothing
+            long n = snd_midi_event_decode(midi->seq_decoder, state.buffer, DEV_MIDI_INPUT_BUFFER_SIZE, ev);
+            if (n > 0) {
+                dev_midi_consume_buffer(&state, n, midi);
+            }
+        }
+    }
+
+    return NULL;
+}
+
+static ssize_t dev_midi_seq_send(struct dev_midi *midi, uint8_t *data, size_t n) {
+    snd_seq_event_t ev;
+    size_t sent = 0;
+
+    while (sent < n) {
+        snd_seq_ev_clear(&ev);
+        long used = snd_midi_event_encode(midi->seq_encoder, data + sent, n - sent, &ev);
+        if (used <= 0) {
+            break;
+        }
+        sent += used;
+        // the encoder returns no event until a message is complete
+        if (ev.type != SND_SEQ_EVENT_NONE) {
+            snd_seq_ev_set_source(&ev, midi->seq_port);
+            snd_seq_ev_set_subs(&ev);
+            snd_seq_ev_set_direct(&ev);
+            if (snd_seq_event_output_direct(midi->seq, &ev) < 0) {
+                return -1;
+            }
+        }
+    }
+
+    return sent;
+}
+
 ssize_t dev_midi_send(void *self, uint8_t *data, size_t n) {
     struct dev_midi *midi = (struct dev_midi *)self;
+    if (midi->seq != NULL) {
+        return dev_midi_seq_send(midi, data, n);
+    }
     if (midi->handle_out == NULL) {
         return -1;
     } else {

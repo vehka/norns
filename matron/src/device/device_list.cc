@@ -105,6 +105,14 @@ void dev_list_add(device_t type, const char *path, const char *name, lua_State *
             }
         }
         return;
+    case DEV_TYPE_MIDI_SEQ:
+        d = dev_new(type, path, name, false, 0, NULL);
+        ev = post_add_event(d, EVENT_MIDI_ADD);
+        if (ev != NULL) {
+            ev->midi_add.dev = d;
+            event_post(ev);
+        }
+        return;
     case DEV_TYPE_MIDI_VIRTUAL:
         d = dev_new(DEV_TYPE_MIDI_VIRTUAL, NULL, name, false, 0, NULL);
         ev = post_add_event(d, EVENT_MIDI_ADD);
@@ -170,6 +178,7 @@ void dev_list_remove(device_t type, const char *node) {
 
     switch (type) {
     case DEV_TYPE_MIDI:
+    case DEV_TYPE_MIDI_SEQ:
         while (dn != NULL) {
             ev = event_data_new(EVENT_MIDI_REMOVE);
             ev->midi_remove.id = dn->d->base.id;

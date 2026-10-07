@@ -182,6 +182,8 @@ static int _osc_send_crone(lua_State *l);
 // midi
 static int _midi_send(lua_State *l);
 static int _midi_clock_receive(lua_State *l);
+static int _midi_seq_connect(lua_State *l);
+static int _midi_seq_disconnect(lua_State *l);
 
 // crow
 static int _crow_send(lua_State *l);
@@ -596,6 +598,8 @@ void w_init(void) {
     // midi
     lua_register_norns("midi_send", &_midi_send);
     lua_register_norns("midi_clock_receive", &_midi_clock_receive);
+    lua_register_norns("midi_seq_connect", &_midi_seq_connect);
+    lua_register_norns("midi_seq_disconnect", &_midi_seq_disconnect);
 
     // get list of available crone engines
     lua_register_norns("report_engines", &_request_engine_report);
@@ -1788,6 +1792,32 @@ int _midi_clock_receive(lua_State *l) {
     int enabled = lua_tointeger(l, 2);
     md->clock_enabled = enabled > 0;
     // fprintf(stderr, "set clock_enabled to %d on device %p\n", enabled, md);
+    return 0;
+}
+
+/***
+ * midi: add a device connected to an alsa sequencer port
+ * @function midi_seq_connect
+ * @param name device name
+ * @param addr sequencer address of the port, as "client:port"
+ */
+int _midi_seq_connect(lua_State *l) {
+    lua_check_num_args(2);
+    const char *name = luaL_checkstring(l, 1);
+    const char *addr = luaL_checkstring(l, 2);
+    dev_list_add(DEV_TYPE_MIDI_SEQ, addr, strdup(name), NULL);
+    return 0;
+}
+
+/***
+ * midi: remove a device added with midi_seq_connect
+ * @function midi_seq_disconnect
+ * @param addr sequencer address of the port, as "client:port"
+ */
+int _midi_seq_disconnect(lua_State *l) {
+    lua_check_num_args(1);
+    const char *addr = luaL_checkstring(l, 1);
+    dev_list_remove(DEV_TYPE_MIDI_SEQ, addr);
     return 0;
 }
 

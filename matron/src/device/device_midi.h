@@ -9,12 +9,18 @@ struct dev_midi {
     bool clock_enabled;
     snd_rawmidi_t *handle_in;
     snd_rawmidi_t *handle_out;
+    // sequencer devices only
+    snd_seq_t *seq;
+    int seq_port;
+    snd_midi_event_t *seq_encoder;
+    snd_midi_event_t *seq_decoder;
 };
 
 extern unsigned int dev_midi_port_count(const char *path);
 
 extern int dev_midi_init(void *self, unsigned int port_index, bool multiport_device);
 extern int dev_midi_virtual_init(void *self);
+extern int dev_midi_seq_init(void *self);
 
 extern void dev_midi_deinit(void *self);
 extern void *dev_midi_start(void *self);

@@ -15,6 +15,8 @@ typedef enum {
     DEV_TYPE_MIDI_VIRTUAL = 4,
     // generic serial device
     DEV_TYPE_SERIAL = 5,
+    // midi device connected to an alsa sequencer port
+    DEV_TYPE_MIDI_SEQ = 6,
     // counter - unused, don't remove
     DEV_TYPE_COUNT,
     DEV_TYPE_INVALID
