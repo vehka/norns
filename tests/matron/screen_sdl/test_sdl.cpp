@@ -44,6 +44,8 @@ TEST_CASE("sdl_scancode_to_evdev maps representative keys") {
     CHECK(sdl_scancode_to_evdev(SDL_SCANCODE_SPACE) == KEY_SPACE);
     CHECK(sdl_scancode_to_evdev(SDL_SCANCODE_RETURN) == KEY_ENTER);
     CHECK(sdl_scancode_to_evdev(SDL_SCANCODE_ESCAPE) == KEY_ESC);
+    CHECK(sdl_scancode_to_evdev(SDL_SCANCODE_NONUSBACKSLASH) == KEY_102ND);
+    CHECK(sdl_scancode_to_evdev(SDL_SCANCODE_NONUSHASH) == KEY_BACKSLASH);
 }
 
 TEST_CASE("sdl_scancode_to_evdev returns 0 for unmapped scancodes") {
