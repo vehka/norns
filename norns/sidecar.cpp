@@ -16,7 +16,16 @@
 //---------------------------------
 //--- common
 
-const char *url = "ipc:///tmp/norns-sidecar.ipc";
+// ipc socket lives in $TMPDIR when set (e.g. Termux, which has no /tmp)
+static const char *sidecar_url(void) {
+    static char buf[512];
+    if (buf[0] == '\0') {
+        const char *tmp = getenv("TMPDIR");
+        snprintf(buf, sizeof(buf), "ipc://%s/norns-sidecar.ipc", (tmp && tmp[0]) ? tmp : "/tmp");
+    }
+    return buf;
+}
+#define url sidecar_url()
 
 static void sidecar_nng_error(const char *func, int rv) {
     fprintf(stderr, "%s: %s\n", func, nng_strerror(rv));

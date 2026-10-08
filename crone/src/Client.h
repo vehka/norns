@@ -164,7 +164,10 @@ class Client {
                                             JackPortIsPhysical | JackPortIsOutput);
 
         if (ports == nullptr) {
-            throw std::runtime_error("no ADC ports found");
+            // not fatal: a playback-only backend (e.g. jack's opensles driver
+            // without microphone permission) has no capture ports
+            std::cerr << "no ADC ports found; running without audio input" << std::endl;
+            return;
         }
 
         for (int i = 0; i < NumIns; ++i) {

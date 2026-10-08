@@ -10,9 +10,15 @@ static platform_t p = PLATFORM_UNKNOWN;
 void init_platform() {
     if (access("/sys/firmware/devicetree/base/model", F_OK) != -1) {
 
+        // the node can exist but be unreadable (android)
         FILE *fptr = fopen("/sys/firmware/devicetree/base/model", "r");
-        char modelString[100];
-        fgets(modelString, 100, fptr);
+        if (fptr == NULL) {
+            return;
+        }
+        char modelString[100] = "";
+        if (fgets(modelString, 100, fptr) == NULL) {
+            modelString[0] = '\0';
+        }
         fclose(fptr);
 
         if (strstr(modelString, "Compute Module 3")) {
