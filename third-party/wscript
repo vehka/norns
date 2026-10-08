@@ -36,8 +36,9 @@ def build_cjson(bld):
         cflags=[
             '-O3',
             '-Wall',
-            '-Wimplicit-fallthrough=0', # NOTE: GCC7+ warns by default which results in Werror build failures
+            '-Wno-implicit-fallthrough', # NOTE: GCC7+ warns by default which results in Werror build failures (clang rejects the =0 spelling)
             '-pedantic',
+            '-Wno-strict-prototypes', # clang: fpconv declares `()` functions, fatal with -pedantic -Werror
         ],
         defines=[
             'NDEBUG'
