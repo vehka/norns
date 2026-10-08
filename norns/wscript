@@ -146,6 +146,16 @@ def build(bld):
         norns_cxxflags += ['-mfpu=neon']
     norns_ldflags = ['-Wl,-export-dynamic']
 
+    if bld.env.NORNS_ANDROID:
+        compat = '../matron/src/compat/android'
+        norns_sources.remove('../matron/src/device/device_monitor.cc')
+        norns_sources += [
+            compat + '/device_monitor.cc',
+            compat + '/pthread_cancel.cc',
+        ]
+        norns_includes.append(compat)
+        norns_cxxflags += ['-include', 'android_compat.h']
+
     if bld.env.NORNS_PROFILE:
         norns_cxxflags += ['-pg']
         norns_ldflags += ['-pg']

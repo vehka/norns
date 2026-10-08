@@ -55,6 +55,8 @@ void *stat_check(void *x) {
     uint32_t prevtotal[5] = {0, 0, 0, 0, 0};
     int32_t totald, idled;
 
+    bool cpu_read_failed = false;
+
     while (1) {
         number++;
         if (number == 5)
@@ -64,8 +66,8 @@ void *stat_check(void *x) {
         if (number == 0) {
             size_t size = 0;
             char *buff = NULL;
-            sidecar_client_cmd("df -l --output=avail / | tail -1 | awk '{ print $1 }'", &buff, &size);
-            if (size == 0) {
+            sidecar_client_cmd("df -l --output=avail / 2>/dev/null | tail -1 | awk '{ print $1 }'", &buff, &size);
+            if (size == 0 || buff == NULL || buff[0] == '\0') {
                 fprintf(stderr, "Error: disk free read\n");
             } else {
                 disk = atoi(buff) / 1000; // convert to MB
@@ -92,10 +94,15 @@ void *stat_check(void *x) {
         // check cpu
         size_t size = 0;
         char *buff = NULL;
-        sidecar_client_cmd("cat /proc/stat", &buff, &size);
+        sidecar_client_cmd("cat /proc/stat 2>/dev/null", &buff, &size);
 
-        if (size == 0) {
-            fprintf(stderr, "Error: cpu read\n");
+        // the command can succeed with no usable output (e.g. /proc/stat is
+        // unreadable on android), so check the content, not just the size
+        if (size == 0 || buff == NULL || strncmp(buff, "cpu", 3) != 0) {
+            if (!cpu_read_failed) {
+                fprintf(stderr, "Error: cpu read\n");
+                cpu_read_failed = true;
+            }
         } else {
             int i = 0;
             strtok(buff, " ");
@@ -139,6 +146,7 @@ void *stat_check(void *x) {
         event_post(ev);
 
         sleep(STAT_INTERVAL);
+        pthread_testcancel();
     }
     return NULL;
 }

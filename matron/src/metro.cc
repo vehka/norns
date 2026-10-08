@@ -201,6 +201,10 @@ void *metro_thread_loop(void *metro) {
 
     metro_set_current_time(t);
     while (!stop) {
+        // where cancellation is deferred to explicit points (android), a
+        // cancelled thread must exit before metro_sleep() advances t->time,
+        // which a restarted metro already owns
+        pthread_testcancel();
         metro_sleep(t);
         pthread_mutex_lock(&(t->stage_lock));
         if ((t->stage >= t->count) && (t->count > 0)) {

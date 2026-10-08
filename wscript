@@ -60,17 +60,28 @@ def configure(conf):
     conf.env.append_unique('CXXFLAGS', ['-std=c++14'])
     conf.define('_GNU_SOURCE', 1)
 
+    # Termux: no udev, gpiod or avahi; matron/src/compat/android stands in
+    conf.env.NORNS_ANDROID = bool(conf.check_cc(
+        msg='Checking for android',
+        fragment='#ifndef __ANDROID__\n#error\n#endif\nint main(void) { return 0; }\n',
+        mandatory=False))
+    if conf.env.NORNS_ANDROID:
+        conf.define('NORNS_ANDROID', True)
+
     conf.check_cfg(package='alsa', args=['--cflags', '--libs'])
-    conf.check_cfg(package='libudev', args=['--cflags', '--libs'])
+    if not conf.env.NORNS_ANDROID:
+        conf.check_cfg(package='libudev', args=['--cflags', '--libs'])
     conf.check_cfg(package='libevdev', args=['--cflags', '--libs'])
     conf.check_cfg(package='glib-2.0', args=['--cflags', '--libs'])
-    conf.check_cfg(package='libgpiod', args=['--cflags', '--libs'])
+    if not conf.env.NORNS_ANDROID:
+        conf.check_cfg(package='libgpiod', args=['--cflags', '--libs'])
     conf.check_cfg(package='liblo', args=['--cflags', '--libs'])
     conf.check_cfg(package='cairo', args=['--cflags', '--libs'])
     conf.check_cfg(package='cairo-ft', args=['--cflags', '--libs'])
     conf.check_cfg(package='lua53', args=['--cflags', '--libs'])
 
-    conf.check_cfg(package='avahi-compat-libdns_sd', args=['--cflags', '--libs'])
+    if not conf.env.NORNS_ANDROID:
+        conf.check_cfg(package='avahi-compat-libdns_sd', args=['--cflags', '--libs'])
     conf.check_cfg(package='sndfile', args=['--cflags', '--libs'])
     conf.check_cfg(package='jack', args=['--cflags', '--libs'])
 
@@ -124,7 +135,8 @@ def build(bld):
     bld.recurse('ws-wrapper')
     #bld.recurse('crone')
     bld.recurse('third-party')
-    bld.recurse('watcher')
+    if not bld.env.NORNS_ANDROID:
+        bld.recurse('watcher')
     bld.recurse('norns')
 
 def test(bld):

@@ -98,5 +98,6 @@ void *battery_check(void *x) {
         }
 
         sleep(BATTERY_POLL_INTERVAL);
+        pthread_testcancel();
     }
 }
