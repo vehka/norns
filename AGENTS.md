@@ -45,6 +45,12 @@ Not done / not tested:
 | `~/norns-deps/prefix` | nng (static), libmonome, `jack_connect`, `jack_lsp`, `repl-send`, `jack-aaudio` |
 | `~/norns-deps/waf` | waf 2.1.4; the bundled `./waf` fails on Python 3.12+ |
 | `~/.local/share/SuperCollider/Extensions/norns-config.sc` | adds the norns SC class paths |
+| `~/.local/share/SuperCollider/Extensions/mi-UGens` | `MiPlaits`, built by the emplaitress installer |
+| `~/norns-deps/src/mi-UGens` | hand build of all twelve mi-UGens (`build/mi-UGens`), not installed |
+| `~/.local/share/SuperCollider/Extensions/sc3-plugins` | `JPverb`, `Greyhole`, `DistortionUGens` (`Decimator` and others) |
+| `~/norns-deps/src/sc3-plugins` | `supercollider/sc3-plugins` with its submodules; only those three targets built |
+| `~/src/norns-deps` | `vehka/norns-deps`, on its `termux` branch (see Scripts, mods and UGens) |
+| `~/src/noseda` | the `noseda` agent skill, linked into `~/.claude/skills` |
 | `$TMPDIR/norns-run/` | `jack.log`, `aaudio.log`, `sclang.log`, `norns.log`, `launch.log`, `restart.log` |
 | `~/.shortcuts/tasks/` | `norns`, `norns-stop` (Termux:Widget) |
 
@@ -91,6 +97,10 @@ repl-send ws4://127.0.0.1:5555 'print(norns.version.update)' 2   # matron (Lua)
 repl-send ws4://127.0.0.1:5556 's.queryAllNodes' 2               # sclang
 ```
 
+`python3 ~/.claude/skills/noseda/scripts/nrepl.py 'lua'` (from the `noseda`
+skill, needs `websocket-client`) reaches matron the same way and takes
+`--wait SECONDS`; it has no option for the sclang port.
+
 `build/maiden-repl/maiden-repl` is the interactive equivalent. The REPL
 transport is nng bus0 over websocket in text mode (`ws4://`, with
 `NNG_OPT_WS_SEND_TEXT` / `RECV_TEXT`); a plain websocket client will not work.
@@ -117,6 +127,14 @@ transport is nng bus0 over websocket in text mode (`ws4://`, with
 - **sclang must be up before norns**, and needs one throwaway start after
   `norns-config.sc` is first installed (the include paths are only compiled in
   on the next launch).
+- **One mod that fails to load stops all of them.** `mods.load` does not
+  catch errors, so the mods after it in the scan are not loaded either, and
+  the only sign is a traceback after `loading mod:` in `norns.log`. Seen
+  with nbout cloned without its `lib/nb` submodule.
+- **`norns.script.clear()` sets `note_players` to nil.** nb voices can only
+  be tested with a script loaded.
+- **`norns.is_shield` is true here and `norns.is_desktop` is nil.** Code
+  that asks norns what it runs on takes this for a shield.
 - **No `/tmp`, no `sudo`, no `/home/we`.** Use `$TMPDIR`. Community scripts
   that hardcode `/home/we` will break.
 - **`/proc/stat`, `/sys/firmware`, `/dev/snd`, `/dev/input` are
@@ -194,11 +212,73 @@ points here. Any thread that something will `pthread_cancel` (and especially
   device threads need the `pthread_testcancel()` rule above).
 - **Pi-only menus** (wifi, update, password) call `nmcli`, `systemctl`,
   `sudo` and just log errors.
-- **Engines.** Only the stock SuperCollider UGens are installed; sc3-plugins
-  is not packaged for Termux. The SC plugin headers are present
-  (`$PREFIX/include/SuperCollider`), so it can be built.
+- **Engines.** Only the stock SuperCollider UGens, `MiPlaits` and three
+  sc3-plugins targets (`JPverb`, `Greyhole`, `DistortionUGens`) are
+  installed; sc3-plugins is not packaged for Termux. Plugins can be built
+  against the installed headers (see Scripts, mods and UGens).
 - **Android may kill background processes.** `start.sh` takes a
   `termux-wake-lock`; `stop.sh` releases it.
+
+## Scripts, mods and UGens
+
+Installed in `~/dust/code` and enabled in `~/dust/data/system.mods`:
+
+| Mod | Checkout | Notes |
+|---|---|---|
+| `emplaitress` | `vehka/emplaitress`, branch `build-ugens` | four Plaits voices for nb; builds `MiPlaits` itself |
+| `modhousekeeper` | `vehka/modhousekeeper`, branch `fix-submodules` | mod manager; clones mods with their submodules |
+| `nbout` | `sixolet/nbout` | MIDI device `17: nb` that plays an nb voice |
+
+Scripts: `awake` and `vehka/takt` (engine `Timber_Takt`, which needs
+`JPverb` and `Decimator` from sc3-plugins; used by hand with the virtual
+grid).
+
+Neither branch is merged to `main` yet. Verified: `awake` with `out` = midi,
+`midi out device` = `17: nb` and `nb midi ch 1` = `emplait 1` plays through
+emplaitress.
+
+- **norns-deps: use the `termux` branch.** `vehka/norns-deps` is the
+  installer library that scripts and mods carry a copy of (`lib/deps.lua`
+  and `lib/deps/`). Its `main` does not know Termux: it takes the phone for
+  a shield with `apt`, cannot find SuperCollider under `$PREFIX`, and after
+  an install offers `sudo shutdown -r now` because JACK has no files in
+  `/dev/shm` here. The `termux` branch (checked out in `~/src/norns-deps`)
+  fixes these: `pm` is `termux` (`pkg install`, no root), the platform
+  counts as desktop, and a restart is `_norns.reset()`, which runs
+  `$NORNS_RESTART_CMD`. For any script or mod here that uses the library,
+  copy `lib/deps.lua` and `lib/deps/` from that branch, and make library
+  fixes there (`lua5.3 tests/run.lua`), not in the copy. This holds until
+  the branch is merged.
+- **Mods with git submodules** need `git clone --recurse-submodules`, or
+  `git submodule update --init --recursive` afterwards. `start.sh` does not
+  run maiden, so there is no `;install`; clone into `~/dust/code`.
+- **Enabling a mod without the menu:**
+  `require('core/mods').set_enabled('<name>', true, true)` over the REPL,
+  then restart the stack.
+- **A new or changed `.sc` class or UGen needs the whole stack restarted**
+  (`termux/start.sh`). sclang compiles everything under `~/dust` and the
+  Extensions folder at start, so never leave a second copy of a class file
+  in either: a checkout of a UGen repository with `sc/Classes` belongs
+  elsewhere (`~/norns-deps/src`, `~/.cache`).
+- **Building SuperCollider plugins.** Projects that want a SuperCollider
+  source tree (`-DSC_PATH=...`, then `include/plugin_interface`) accept a
+  folder whose `include` is a link to `$PREFIX/include/SuperCollider`;
+  `~/norns-deps/src/sc-headers` is one. mi-UGens built unchanged this way
+  (about a minute for all twelve). Its single-project `CMakeLists.txt`
+  files have no `cmake_minimum_required` and fail with the current cmake;
+  wrap them with `add_subdirectory`, as the emplaitress recipe does.
+  Install into `~/.local/share/SuperCollider/Extensions/<name>`.
+- **sc3-plugins** also reads `SCVersion.txt` from the top of `SC_PATH`
+  (`sc-headers` has a link to `include/SCVersion.txt`). Configure with
+  `-DSC_PATH=$HOME/norns-deps/src/sc-headers -DSUPERNOVA=OFF -DQUARKS=OFF`,
+  then build single targets (`make JPverb Greyhole DistortionUGens`; the
+  names are in `make help`) and copy each `.so` together with its class
+  file from `source/<group>/sc/`. An engine that names a class which is not
+  installed stops the whole class library from compiling, so check a new
+  script's `.sc` files for UGens before restarting.
+- **Measuring instead of listening:** poll `amp_out_l` from Lua
+  (`poll.set("amp_out_l", fn)`) with a script loaded that is silent itself.
+  `~/dust/code/termux-test` plays a sine, so it will not do.
 
 ## Audio output
 
