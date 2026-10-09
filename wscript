@@ -109,6 +109,17 @@ def configure(conf):
         conf.check_cfg(package='sdl2', args=['--cflags', '--libs'])
         conf.define('NORNS_DESKTOP', True)
 
+    # Termux:GUI window (screen:tgui); it posts the desktop input events
+    conf.env.HAVE_TERMUXGUI = False
+    if conf.env.NORNS_ANDROID and conf.options.desktop:
+        conf.env.HAVE_TERMUXGUI = bool(conf.check_cc(
+            msg='Checking for termuxgui',
+            define_name='HAVE_TERMUXGUI',
+            mandatory=False,
+            lib='termuxgui',
+            header_name='termuxgui/termuxgui.h',
+            uselib_store='TERMUXGUI'))
+
     conf.env.NORNS_DESKTOP = conf.options.desktop
 
     if conf.options.release:

@@ -46,6 +46,9 @@
 #include "osc.h"
 #include "platform.h"
 #include "screen.h"
+#ifdef HAVE_TERMUXGUI
+#include "hardware/screen/screens.h"
+#endif
 #include "screen_events.h"
 #include "screen_results.h"
 #include "sidecar.h"
@@ -135,6 +138,9 @@ static int _screen_text_trim(lua_State *l);
 static int _screen_clear(lua_State *l);
 static int _screen_close(lua_State *l);
 static int _screen_export_png(lua_State *l);
+#ifdef HAVE_TERMUXGUI
+static int _screen_tgui_show(lua_State *l);
+#endif
 static int _screen_export_screenshot(lua_State *l);
 static int _screen_display_png(lua_State *l);
 static int _screen_peek(lua_State *l);
@@ -553,6 +559,9 @@ void w_init(void) {
     lua_register_norns("screen_close", &_screen_close);
 
     lua_register_norns("screen_export_png", &_screen_export_png);
+#ifdef HAVE_TERMUXGUI
+    lua_register_norns("screen_tgui_show", &_screen_tgui_show);
+#endif
     lua_register_norns("screen_export_screenshot", &_screen_export_screenshot);
     lua_register_norns("screen_display_png", &_screen_display_png);
     lua_register_norns("screen_peek", &_screen_peek);
@@ -1177,6 +1186,18 @@ int _screen_export_png(lua_State *l) {
     lua_settop(l, 0);
     return 0;
 }
+
+#ifdef HAVE_TERMUXGUI
+/***
+ * screen: reopen the Termux:GUI window
+ * @function s_tgui_show
+ */
+int _screen_tgui_show(lua_State *l) {
+    lua_check_num_args(0);
+    screen_tgui_show();
+    return 0;
+}
+#endif
 
 /***
  * screen: export_screenshot

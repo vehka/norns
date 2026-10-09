@@ -15,6 +15,9 @@ io_ops_t *io_types[] = {
     (io_ops_t *)&screen_sdl_ops,
     (io_ops_t *)&input_sdl_ops,
 #endif
+#ifdef HAVE_TERMUXGUI
+    (io_ops_t *)&screen_tgui_ops,
+#endif
     (io_ops_t *)NULL,
 };
 
