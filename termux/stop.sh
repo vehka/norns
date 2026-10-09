@@ -15,8 +15,10 @@ sleep 1
 for pat in 'build/ws-wrapper/ws-wrapper' 'build/norns/norns' '^sidecar \[norns\]' '^sidecar$' '^sclang' '^scsynth'; do
     stop -KILL "$pat"
 done
+stop -TERM '^jack-aaudio'
 stop -TERM '^jackd'
 sleep 1
 stop -KILL '^jackd'
+stop -KILL '^jack-aaudio'
 command -v termux-wake-unlock >/dev/null && termux-wake-unlock
 exit 0

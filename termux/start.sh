@@ -21,10 +21,21 @@ wait_for() { # file, pattern, seconds
     return 1
 }
 
-# jack's opensles driver; a client that dies uncleanly leaves the server
-# unusable, which is why stop.sh always takes jack down too
-nohup jackd -d opensles ${NORNS_JACK_ARGS:-} > "$NORNS_LOG/jack.log" 2>&1 &
-sleep 3
+# jackd runs on a timer (the dummy driver) and jack-aaudio plays its monitor
+# ports through android's audio; termux's own opensles driver crackles.
+# NORNS_JACK_DRIVER=opensles goes back to it. either way, a client that dies
+# uncleanly leaves the server unusable, which is why stop.sh always takes
+# jack down too
+if [ "${NORNS_JACK_DRIVER:-dummy}" = dummy ]; then
+    nohup jackd -d dummy -m -r 48000 -p "${NORNS_JACK_PERIOD:-960}" \
+        > "$NORNS_LOG/jack.log" 2>&1 &
+    sleep 2
+    nohup jack-aaudio "${NORNS_AUDIO_BUFFER_MS:-60}" > "$NORNS_LOG/aaudio.log" 2>&1 &
+    sleep 1
+else
+    nohup jackd -d opensles ${NORNS_JACK_ARGS:-} > "$NORNS_LOG/jack.log" 2>&1 &
+    sleep 3
+fi
 
 # sclang must own port 57120 before matron starts its handshake
 nohup build/ws-wrapper/ws-wrapper ws://0.0.0.0:5556 sclang \

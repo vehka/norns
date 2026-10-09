@@ -14,7 +14,7 @@ mkdir -p "$SRC" "$PREFIX_DEPS/bin"
 
 pkg install -y x11-repo
 pkg install -y supercollider jack2 liblo lua53 libcairo libsndfile alsa-lib glib \
-    sdl2 libevdev ncurses readline clang cmake ninja pkg-config python git
+    sdl2 termux-gui-c libevdev ncurses readline clang cmake ninja pkg-config python git
 
 [ -f "$WAF" ] || curl -fsSL -o "$WAF" https://waf.io/waf-2.1.4
 
@@ -53,6 +53,10 @@ fi
 clang -O1 -I"$PREFIX_DEPS/include" -o "$PREFIX_DEPS/bin/repl-send" \
     "$NORNS_DIR/termux/repl-send.c" "$PREFIX_DEPS/lib/libnng.a" -latomic
 
+# audio output: plays jack's monitor ports through AAudio (android api 26+)
+clang -O2 -target "$(clang -dumpmachine | sed 's/[0-9]*$//')26" -o "$PREFIX_DEPS/bin/jack-aaudio" \
+    "$NORNS_DIR/termux/jack-aaudio.c" -ljack -laaudio
+
 cd "$NORNS_DIR"
 git submodule update --init --recursive
 export CPPFLAGS="-I$PREFIX_DEPS/include"
@@ -65,8 +69,9 @@ python3 "$WAF" build --desktop
 mkdir -p "$HOME/dust/code" "$HOME/dust/data" "$HOME/dust/audio/tape"
 mkdir -p "$HOME/.local/share/SuperCollider/Extensions"
 cp sc/norns-config.sc "$HOME/.local/share/SuperCollider/Extensions/"
-# headless by default; see matronrc.lua.desktop for the SDL window
-[ -e "$HOME/matronrc.lua" ] || echo '-- headless: no screen/input IO registered' > "$HOME/matronrc.lua"
+# screen and controls in a Termux:GUI window; without the Termux:GUI app
+# installed this only logs a warning and norns runs headless
+[ -e "$HOME/matronrc.lua" ] || echo "_boot.add_io('screen:tgui', {})" > "$HOME/matronrc.lua"
 
 echo "built. sclang needs one throwaway start to register the norns class paths;"
 echo "termux/start.sh does the rest."
