@@ -1,6 +1,7 @@
 #include <atomic>
 #include <pthread.h>
 #include <stdio.h>
+#include <time.h>
 
 #include <jack/jack.h>
 
@@ -58,6 +59,21 @@ uint32_t jack_client_get_xrun_count() {
 }
 
 double jack_client_get_current_time() {
+#ifdef __ANDROID__
+    // termux's jackd (opensles driver) never advances its frame timer:
+    // jack_frame_time() stays at whatever it read first. use the system
+    // clock, starting from zero like the frame count does.
+    static struct timespec start = {0, 0};
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    pthread_mutex_lock(&g_time_lock);
+    if (start.tv_sec == 0 && start.tv_nsec == 0) {
+        start = now;
+    }
+    double elapsed = (double)(now.tv_sec - start.tv_sec) + (double)(now.tv_nsec - start.tv_nsec) / 1e9;
+    pthread_mutex_unlock(&g_time_lock);
+    return elapsed;
+#endif
     uint32_t current_frames = (uint32_t)jack_frame_time(jack_client);
 
     pthread_mutex_lock(&g_time_lock);

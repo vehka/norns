@@ -24,6 +24,12 @@ extern "C" {
 int pthread_cancel(pthread_t thread);
 void pthread_testcancel(void);
 
+// Only threads created through this wrapper can be cancelled; for any other
+// thread, and for one that has already exited, pthread_cancel() returns
+// ESRCH.
+int norns_pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start)(void *), void *arg);
+#define pthread_create norns_pthread_create
+
 #ifdef __cplusplus
 }
 #endif

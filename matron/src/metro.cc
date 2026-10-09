@@ -266,6 +266,8 @@ void metro_cancel(struct metro *t) {
         switch (ret) {
         case ESRCH:
             fprintf(stderr, "specified thread does not exist\n");
+            // the thread is gone either way; don't leave it marked running
+            t->status = METRO_STATUS_STOPPED;
             break;
         default:
             fprintf(stderr, "unknown error code\n");
