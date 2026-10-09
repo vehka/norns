@@ -37,6 +37,7 @@ struct metro {
     uint64_t time;               // current time (in nsec)
     uint64_t delta;              // current delta (in nsec)
     pthread_t tid;               // thread id
+    uint64_t gen;                // counts starts; tells a thread it was replaced
     pthread_mutex_t stage_lock;  // mutex protecting stage number
     pthread_mutex_t status_lock; // mutex protecting status
 };
@@ -77,6 +78,7 @@ void metro_start(int idx, double seconds, int count, int stage) {
         if (t->status == METRO_STATUS_RUNNING) {
             metro_cancel(t);
         }
+        t->gen++;
         pthread_mutex_unlock(&t->status_lock);
         if (seconds > 0.0) {
             metros[idx].seconds = seconds;
@@ -158,13 +160,20 @@ void metro_init(struct metro *t, uint64_t nsec, int count) {
 
     t->delta = nsec;
     t->count = count;
+    // mark it running before the thread exists: a short count-limited metro
+    // can finish, and mark itself stopped, before pthread_create() returns
+    pthread_mutex_lock(&(t->status_lock));
+    t->status = METRO_STATUS_RUNNING;
+    pthread_mutex_unlock(&(t->status_lock));
     res = pthread_create(&(t->tid), &attr, &metro_thread_loop, (void *)t);
     if (res != 0) {
+        pthread_mutex_lock(&(t->status_lock));
+        t->status = METRO_STATUS_STOPPED;
+        pthread_mutex_unlock(&(t->status_lock));
         metro_handle_error(res, "pthread_create");
         return;
     } else {
         pthread_setname_np(t->tid, "metro_loop");
-        t->status = METRO_STATUS_RUNNING;
         if (res != 0) {
             metro_handle_error(res, "pthread_setschedparam");
             switch (res) {
@@ -195,8 +204,12 @@ void *metro_thread_loop(void *metro) {
     struct metro *t = (struct metro *)metro;
     int stop = 0;
 
+    // the status is owned by metro_init() / metro_cancel(). setting it to
+    // running here would undo a stop that came before this thread first ran,
+    // and leave a dead thread id to be cancelled later, by which time it may
+    // belong to another thread.
     pthread_mutex_lock(&(t->status_lock));
-    t->status = METRO_STATUS_RUNNING;
+    uint64_t gen = t->gen;
     pthread_mutex_unlock(&(t->status_lock));
 
     metro_set_current_time(t);
@@ -223,7 +236,10 @@ void *metro_thread_loop(void *metro) {
         pthread_mutex_unlock(&(t->stage_lock));
     }
     pthread_mutex_lock(&(t->status_lock));
-    t->status = METRO_STATUS_STOPPED;
+    // a metro restarted while this thread was finishing is not ours to stop
+    if (t->gen == gen) {
+        t->status = METRO_STATUS_STOPPED;
+    }
     pthread_mutex_unlock(&(t->status_lock));
     return NULL;
 }

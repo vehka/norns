@@ -151,6 +151,13 @@ transport is nng bus0 over websocket in text mode (`ws4://`, with
 - `matron/src/metro.cc`, `hardware/stat.cc`, `hardware/battery.cc`: extra
   `pthread_testcancel()` calls so the loops are cancellable under the shim.
   `metro_cancel()` marks a metro stopped when its thread is already gone.
+  The running/stopped status is set only by `metro_init()` and
+  `metro_cancel()`; a metro thread marks itself stopped at the end of a
+  count-limited run only if the metro was not restarted meanwhile (`gen`).
+  Before, a thread that first ran after its metro was stopped marked it
+  running again, which left a dead thread id to be cancelled later (the
+  `metro_stop(): ... specified thread does not exist` lines, and takt's
+  redraw metro dying). Not behind `__ANDROID__`.
 - `matron/src/jack_client.cpp`: `jack_client_get_current_time()` uses
   `CLOCK_MONOTONIC` on Android. Termux's jackd never advances
   `jack_frame_time()` (a fresh client reads 0 forever), which froze the whole
