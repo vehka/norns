@@ -45,6 +45,13 @@ if ! wait_for "$NORNS_LOG/sclang.log" 'AudioContext: initPolls' 60; then
     exit 1
 fi
 
+# SYSTEM > SLEEP and RESTART in the norns menu: there is no systemd and no
+# powering off here, so they stop or restart this whole stack (see
+# lua/core/norns.lua). detached, because the stack they run in gets killed
+export NORNS_LOG
+export NORNS_SHUTDOWN_CMD="setsid nohup $NORNS_DIR/termux/stop.sh > /dev/null 2>&1 < /dev/null &"
+export NORNS_RESTART_CMD="setsid nohup $NORNS_DIR/termux/start.sh > $NORNS_LOG/restart.log 2>&1 < /dev/null &"
+
 nohup build/ws-wrapper/ws-wrapper ws://0.0.0.0:5555 build/norns/norns \
     > "$NORNS_LOG/norns.log" 2>&1 < /dev/null &
 if wait_for "$NORNS_LOG/norns.log" 'norns.startup_status.ok' 40; then

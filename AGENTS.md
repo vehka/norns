@@ -45,7 +45,8 @@ Not done / not tested:
 | `~/norns-deps/prefix` | nng (static), libmonome, `jack_connect`, `jack_lsp`, `repl-send`, `jack-aaudio` |
 | `~/norns-deps/waf` | waf 2.1.4; the bundled `./waf` fails on Python 3.12+ |
 | `~/.local/share/SuperCollider/Extensions/norns-config.sc` | adds the norns SC class paths |
-| `$TMPDIR/norns-run/` | `jack.log`, `aaudio.log`, `sclang.log`, `norns.log` |
+| `$TMPDIR/norns-run/` | `jack.log`, `aaudio.log`, `sclang.log`, `norns.log`, `launch.log`, `restart.log` |
+| `~/.shortcuts/tasks/` | `norns`, `norns-stop` (Termux:Widget) |
 
 ## Build and run
 
@@ -53,8 +54,25 @@ Not done / not tested:
 termux/build.sh     # packages, deps, configure, build, runtime layout
 termux/start.sh     # jack -> jack-aaudio -> sclang -> norns; waits for startup ok
 termux/stop.sh      # stops everything, including jack
-termux/show.sh      # reopen the norns window after closing it
+termux/show.sh      # bring up the norns window (reopen or raise it)
+termux/launch.sh    # start.sh if norns is not running, else show.sh
+termux/install-widget.sh   # Termux:Widget shortcuts (build.sh runs it)
 ```
+
+**Home screen widget.** `install-widget.sh` writes two wrappers into
+`~/.shortcuts/tasks/` (real files; they run without a terminal): `norns`
+runs `launch.sh`, `norns-stop` runs `stop.sh`. They show up in the
+Termux:Widget widget (`com.termux.widget`) once it is added to the home
+screen or refreshed. A task has no output: `launch.sh` logs to
+`$TMPDIR/norns-run/launch.log`, and the window appears after about 30 s.
+
+**SLEEP and RESTART in the norns menu.** `lua/core/norns.lua` runs
+`$NORNS_SHUTDOWN_CMD` / `$NORNS_RESTART_CMD` instead of `sudo shutdown` and
+`systemctl` + self-terminate when they are set. `start.sh` sets them to a
+detached `stop.sh` / `start.sh` (the latter logging to `restart.log`), so
+SLEEP stops the whole stack and closes the window, and RESTART (also RESET
+and the end of UPDATE) restarts all of it, JACK included. Both verified by
+calling `norns.shutdown()` / `_norns.restart()` over the REPL.
 
 Rebuild after editing sources:
 
@@ -145,8 +163,10 @@ transport is nng bus0 over websocket in text mode (`ws4://`, with
   Registered in `hardware/io.cc` and `screens.h`; `weaver.cc` adds
   `_norns.screen_tgui_show()`. All behind `HAVE_TERMUXGUI`, which `wscript`
   sets when building `--desktop` on Android with `libtermuxgui` present.
-- `termux/`: `build.sh`, `start.sh`, `stop.sh`, `show.sh`, `env.sh`,
-  `repl-send.c`, `jack-aaudio.c`.
+- `lua/core/norns.lua`: `NORNS_SHUTDOWN_CMD` / `NORNS_RESTART_CMD` (above).
+  Unset, as on a real norns, nothing changes.
+- `termux/`: `build.sh`, `start.sh`, `stop.sh`, `show.sh`, `launch.sh`,
+  `install-widget.sh`, `env.sh`, `repl-send.c`, `jack-aaudio.c`.
 
 **Rule for new threads on Android:** blocking calls are not cancellation
 points here. Any thread that something will `pthread_cancel` (and especially
@@ -212,8 +232,9 @@ crone still connects to `system:playback_*` as on any norns.
 - Options: `_boot.add_io('screen:tgui', {enc_step_dp = 12, keep_screen_on = true, debug = false})`.
 - Back hides the window. If it is closed (swiped from recents, or destroyed
   by Android), matron keeps running; `termux/show.sh` or
-  `_norns.screen_tgui_show()` opens it again. An open but backgrounded
-  window cannot be raised from here; use the recents list.
+  `_norns.screen_tgui_show()` opens it again. For an open but backgrounded
+  window the same call asks Android to raise its task (not yet tried; it
+  should need the "Appear on top" permission below).
 - If the plugin is missing or dies, the backend logs a `WARN (screen:tgui)`
   line and norns continues headless; it never fails IO setup.
 - Two threads: one opens the window and presents frames (60 Hz, stopped by

@@ -72,6 +72,7 @@ cp sc/norns-config.sc "$HOME/.local/share/SuperCollider/Extensions/"
 # screen and controls in a Termux:GUI window; without the Termux:GUI app
 # installed this only logs a warning and norns runs headless
 [ -e "$HOME/matronrc.lua" ] || echo "_boot.add_io('screen:tgui', {})" > "$HOME/matronrc.lua"
+"$NORNS_DIR/termux/install-widget.sh"
 
 echo "built. sclang needs one throwaway start to register the norns class paths;"
 echo "termux/start.sh does the rest."

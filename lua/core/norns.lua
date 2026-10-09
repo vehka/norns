@@ -182,6 +182,11 @@ else
   norns.version.update = "000000"
 end
 
+-- a host that is not a norns can name its own commands for the SLEEP and
+-- RESTART menu entries (see termux/start.sh). they must return at once
+local shutdown_cmd = os.getenv("NORNS_SHUTDOWN_CMD")
+local restart_cmd = os.getenv("NORNS_RESTART_CMD")
+
 --- shutdown
 norns.shutdown = function()
   hook.system_pre_shutdown()
@@ -192,7 +197,7 @@ norns.shutdown = function()
   pcall(cleanup)
   audio.level_dac(0)
   audio.headphone_gain(0)
-  _norns.execute("sleep 0.5; sudo shutdown now")
+  _norns.execute(shutdown_cmd or "sleep 0.5; sudo shutdown now")
 end
 
 --- platform detection
@@ -225,6 +230,10 @@ norns.system_glob = _norns.system_glob
 
 -- system reset (restart sclang + self-terminate for systemd relaunch)
 _norns.reset = function()
+  if restart_cmd then
+    _norns.execute(restart_cmd)
+    return
+  end
   -- restart sclang first (synchronous via sidecar, completes before we die)
   _norns.execute("sudo systemctl restart norns-sclang.service")
   -- self-terminate

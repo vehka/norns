@@ -76,6 +76,7 @@ typedef struct {
     tgui_connection c;
     bool connected;
     tgui_activity a; // -1 when there is no window
+    tgui_task task;
     bool visible;
     tgui_buffer *buf;
     int scale;
@@ -324,7 +325,8 @@ static bool tgui_make_pad(tgui_state_t *st, tgui_view *v, const tgui_view *row, 
 static bool tgui_open_window(tgui_state_t *st) {
     st->a = -1;
     // intercept the back button: it hides the window instead of closing it
-    TGUI_TRY(tgui_activity_create(st->c, &st->a, TGUI_ACTIVITY_NORMAL, NULL, true));
+    st->task = -1;
+    TGUI_TRY(tgui_activity_create(st->c, &st->a, TGUI_ACTIVITY_NORMAL, &st->task, true));
     tgui_activity_set_orientation(st->c, st->a, TGUI_ORIENTATION_PORTRAIT);
     tgui_activity_set_keep_screen_on(st->c, st->a, st->priv->keep_screen_on);
 
@@ -379,7 +381,12 @@ static bool tgui_open_window(tgui_state_t *st) {
 // Called with st->lock held. Returns false if the connection should be dropped.
 static bool tgui_show(tgui_state_t *st) {
     if (st->connected && st->a != -1) {
-        return true; // already open; Android does not let us raise it from the background
+        // already open: raise it. Android only honours this while the plugin
+        // may start activities from the background ("Appear on top")
+        if (!st->visible && st->task != -1) {
+            tgui_task_to_front(st->c, st->task);
+        }
+        return true;
     }
     if (!st->connected && !tgui_connect(st)) {
         return false;
