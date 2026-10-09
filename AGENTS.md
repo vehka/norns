@@ -223,13 +223,63 @@ crone still connects to `system:playback_*` as on any norns.
 (`com.termux.gui`, same F-Droid source as Termux) through `libtermuxgui`
 (`pkg install termux-gui-c`). No X server is involved.
 
-- The window is portrait: the screen on top (128x64 upscaled by an integer
-  factor into a shared buffer, 1024x512 on the S23+), then touch pads in the
-  hardware arrangement: `K1 E1` / `E2 E3` / `K2 K3`.
+- Portrait: the screen on top (128x64 upscaled by an integer factor into a
+  shared buffer, 1024x512 on the S23+), then three rows of touch pads, keys
+  on the left and encoders on the right: `K1 E1` / `K2 E2` / `K3 E3`.
+- Landscape: full screen (system bars hidden, back with a swipe from the
+  edge), the screen fills the window, and the pads are invisible zones over
+  its two ends: K1-K3 stacked on the left, E1-E3 on the right, each
+  `zone_width` (default 0.25) of the window wide. The zones cover part of
+  the screen picture; the middle takes no touches.
+- **Virtual grid.** In landscape there is a second page with a 16x8 grid
+  drawn into its own shared buffer. matron sees it as a monome device
+  (`dev_monome_new_virtual_grid()` in `device_monome.cc`: a `dev_monome`
+  with no libmonome handle, whose `refresh` hands the led data to the
+  backend), so scripts use it through `grid.connect()` unchanged. Rotation,
+  intensity and tilt are ignored. A finger holds the cell it lands on until
+  it lifts; sliding does not retrigger.
+- A two-finger sideways swipe (80 dp, either direction) switches pages: on
+  the grid anywhere, on the screen page in the middle part between the
+  zones. Back returns from the grid to the screen page. The two fingers of
+  a swipe on the grid press their two cells until the swipe is recognised.
+- The grid shows up as `tgui grid tgui` in SYSTEM > DEVICES > GRID. It is
+  not put on a port by itself (the add event comes before `system.state` is
+  read, which then names the ports); here port 1 was set once with
+  `grid.vports[1].name = "tgui grid tgui"; grid.update_devices(); norns.state.save()`.
+- **Multi-touch events are not laid out as `types.h` says.** With two
+  fingers on one view the plugin sends `events = 2, num_pointers = 1`: one
+  row per finger, and `index` counts through the rows. Code that reads
+  `pointers[0][index]` or only the last row sees a single finger. Walk all
+  rows and match by pointer id (`tgui_event_pointer()`, `tgui_touches_move()`).
+- **Touch coordinates on an image view with a buffer are in buffer
+  pixels** (0..1023 x 0..511 here), whatever size the view is drawn at; on
+  other views they are view pixels. Found by tapping the corner pads.
+- Grid state: tried by hand with `awake`. Page swipes work in both
+  directions, taps map to the right cells (corner pad = 16,8) and the
+  script reacts, chords included. Holds have not been looked at. The
+  picture is sized from the window height reported with the system bars
+  showing (354 dp on the S23+), so it may sit a little short of the bottom
+  edge. `grid = false` in the options turns it off.
+- The layout follows the rotation of the device, whatever the system
+  auto-rotate setting says (`orientation = "portrait"` or `"landscape"`
+  fixes it). On a rotation the plugin sends a CONFIG event and the views are
+  rebuilt in the same window. Both layouts, and rotating between them with
+  the window open, have been used by hand.
+- `TGUI_ERR_MESSAGE` (4) is mostly not a broken connection: the library
+  returns it when the plugin answers `success = false`, i.e. it did not
+  carry out that one call. It showed up on about half of the cold starts,
+  on an arbitrary call shortly after `tgui_activity_configure_insets()`,
+  and the same call works a moment later. `TGUI_TRY` therefore repeats a
+  call up to ten times, presenting a frame is simply tried again on the
+  next one, and the insets are only touched when they have to change. A
+  failed open is still retried twice as a last resort.
 - Keys follow touch down/up, so holding K1 works. Encoders are drag pads:
   right or up is clockwise, one step per `enc_step_dp` (default 12) of
   travel. They post `EVENT_SDL_ENC`, i.e. exact steps with no acceleration.
-- Options: `_boot.add_io('screen:tgui', {enc_step_dp = 12, keep_screen_on = true, debug = false})`.
+- Options: `_boot.add_io('screen:tgui', {enc_step_dp = 12, keep_screen_on = true, debug = false, orientation = "auto", zone_width = 0.25, grid = true})`.
+- `tgui_get_dimensions()` returns `TGUI_ERR_MESSAGE` for a view that has
+  not been laid out yet, so it is no use while building a layout. It works
+  a few hundred ms later.
 - Back hides the window. If it is closed (swiped from recents, or destroyed
   by Android), matron keeps running; `termux/show.sh` or
   `_norns.screen_tgui_show()` opens it again. For an open but backgrounded
@@ -256,7 +306,7 @@ crone still connects to `system:playback_*` as on any norns.
   times before the permission was granted; the first cold start after
   granting it opened normally.
 - Not done: the hardware keyboard / soft keyboard is not forwarded to the
-  Lua `keyboard` module, and there is no landscape layout.
+  Lua `keyboard` module.
 
 ### SDL (`screen:sdl`)
 

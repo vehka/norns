@@ -12,6 +12,7 @@
 #include "../events.h"
 
 #include "device.h"
+#include "device_list.h"
 #include "device_monome.h"
 
 #define clamp_upper(value, max) ((value) < (max) ? (value) : (max))
@@ -93,6 +94,26 @@ int dev_monome_init(void *self) {
     return 0;
 }
 
+struct dev_monome *dev_monome_new_virtual_grid(int cols, int rows, const char *serial, const char *name,
+                                               void (*refresh)(struct dev_monome *md)) {
+    struct dev_monome *md = (struct dev_monome *)calloc(1, sizeof(struct dev_monome));
+    if (!md) {
+        return NULL;
+    }
+    md->dev.type = DEV_TYPE_MONOME;
+    md->dev.id = dev_list_new_id();
+    md->dev.serial = strdup(serial);
+    md->dev.name = strdup(name);
+    md->type = DEVICE_MONOME_TYPE_GRID;
+    md->cols = cols;
+    md->rows = rows;
+    md->quads = (rows * cols) / 64;
+    memcpy(md->quad_xoff, quad_xoff, sizeof(quad_xoff));
+    memcpy(md->quad_yoff, quad_yoff, sizeof(quad_yoff));
+    md->virtual_refresh = refresh;
+    return md;
+}
+
 // calculate quadrant number given x/y
 static inline uint8_t dev_monome_quad_idx(struct dev_monome *md, uint8_t x, uint8_t y) {
     // are we a 16x8 grid AND rotated 90 or 270 degrees?
@@ -107,6 +128,9 @@ static inline uint8_t dev_monome_quad_offset(uint8_t x, uint8_t y) {
 
 // set grid rotation
 void dev_monome_set_rotation(struct dev_monome *md, uint8_t rotation) {
+    if (md->m == NULL) {
+        return; // a virtual grid does not rotate
+    }
     // for 16x8 grid, only update relevant quads which must change with rotation
     if (md->quads == 2) {
         if (rotation == 0 || rotation == 2) {
@@ -122,10 +146,12 @@ void dev_monome_set_rotation(struct dev_monome *md, uint8_t rotation) {
 
 // enable/disable grid tilt
 void dev_monome_tilt_enable(struct dev_monome *md, uint8_t sensor) {
-    monome_tilt_enable(md->m, sensor);
+    if (md->m != NULL)
+        monome_tilt_enable(md->m, sensor);
 }
 void dev_monome_tilt_disable(struct dev_monome *md, uint8_t sensor) {
-    monome_tilt_disable(md->m, sensor);
+    if (md->m != NULL)
+        monome_tilt_disable(md->m, sensor);
 }
 
 // set a given LED value
@@ -170,6 +196,10 @@ void dev_monome_all_led(struct dev_monome *md, int8_t val, bool rel) {
 // transmit all dirty quads
 void dev_monome_refresh(struct dev_monome *md) {
     if (md->m == NULL) {
+        if (md->virtual_refresh != NULL) {
+            md->virtual_refresh(md);
+            memset(md->dirty, 0, sizeof(md->dirty));
+        }
         return;
     }
 
@@ -187,6 +217,8 @@ void dev_monome_refresh(struct dev_monome *md) {
 
 // intensity
 void dev_monome_intensity(struct dev_monome *md, uint8_t i) {
+    if (md->m == NULL)
+        return;
     if (i > 15)
         i = 15;
     if (md->type == DEVICE_MONOME_TYPE_ARC)
@@ -255,11 +287,11 @@ void dev_monome_handle_encoder_lift(const monome_event_t *e, void *p) {
 }
 
 int dev_monome_grid_rows(struct dev_monome *md) {
-    return monome_get_rows(md->m);
+    return md->m ? monome_get_rows(md->m) : md->rows;
 }
 
 int dev_monome_grid_cols(struct dev_monome *md) {
-    return monome_get_cols(md->m);
+    return md->m ? monome_get_cols(md->m) : md->cols;
 }
 
 void *dev_monome_start(void *md) {
