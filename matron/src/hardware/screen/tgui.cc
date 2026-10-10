@@ -15,18 +15,20 @@
 //     |   K3   |   E3   |
 //     +--------+--------+
 //
-// In landscape there are three more pages: a virtual 16x8 monome grid, and
-// two with a virtual arc (four rings), which scripts see as ordinary monome
-// devices. The pages are a ring, screen - grid - arc - rings. A swipe on the
-// screen picture (its middle part on the screen page) goes to the next page
-// when leftwards and to the previous one when rightwards, and a tap on an
-// encoder zone goes to the next. A tap on a strip right of a picture (the
-// grid, the rings, the small screen of the arc page) goes to the next page,
-// on the strip left of it to the previous one. Back goes to the screen.
+// In landscape there are four more pages: two with a virtual 16x8 monome
+// grid, and two with a virtual arc (four rings), which scripts see as
+// ordinary monome devices. The pages are a ring, screen - grid - grid with
+// screen - arc - rings. A swipe on the screen picture (its middle part on the
+// screen page) goes to the next page when leftwards and to the previous one
+// when rightwards, and a tap on an encoder zone goes to the next. A tap on a
+// strip right of a picture (the grid, the rings, the small screen of the
+// pages that have one) goes to the next page, on the strip left of it to the
+// previous one. Back goes to the screen.
 //
-// The rings page has only the rings, as large as they fit. The arc page has
-// the keys and encoders at its sides too, and a smaller screen above the
-// rings:
+// The grid page has only the grid and the rings page only the rings, as
+// large as they fit. The grid with screen page has the keys and encoders at
+// its sides too, and a smaller screen above a smaller grid. The arc page is
+// the same with the rings:
 //
 //     +----+-----------------+----+
 //     | K1 |     screen      | E1 |
@@ -87,10 +89,12 @@
 #define TGUI_TAP_DP 8
 #define TGUI_TAP_MS 300
 
-enum { TGUI_PAGE_SCREEN = 0, TGUI_PAGE_GRID, TGUI_PAGE_ARC, TGUI_PAGE_RINGS, TGUI_PAGES };
+enum { TGUI_PAGE_SCREEN = 0, TGUI_PAGE_GRID, TGUI_PAGE_GRID_SCR, TGUI_PAGE_ARC, TGUI_PAGE_RINGS, TGUI_PAGES };
 // the pairs of strips that turn the page: beside the grid, beside the screen
-// of the arc page, beside the rings
-enum { TGUI_SIDE_GRID = 0, TGUI_SIDE_ARC, TGUI_SIDE_RINGS, TGUI_SIDES };
+// of the grid with screen page and of the arc page, beside the rings
+enum { TGUI_SIDE_GRID = 0, TGUI_SIDE_GRID_SCR, TGUI_SIDE_ARC, TGUI_SIDE_RINGS, TGUI_SIDES };
+// share of the window height that the grid takes below the screen
+#define TGUI_GRID_SCR_SHARE 0.6f
 
 // the fingers on one view
 typedef struct {
@@ -169,6 +173,11 @@ typedef struct {
     tgui_view side[TGUI_SIDES][2]; // strips left and right of a picture, a tap turns the page
     bool side_down[TGUI_SIDES][2];
     float grid_cell_px;
+    tgui_view gs_img;        // the same picture on the grid with screen page
+    tgui_view gs_scr;        // the screen on that page, takes page swipes
+    tgui_view gs_key[3];     // and its key and encoder zones
+    tgui_view gs_enc[3];
+    float gs_scr_px_per_dp;  // buffer pixels per dp, of that screen
     tgui_view arc_img;
     tgui_view rings_img;     // the same picture on the rings page
     tgui_view arc_scr;       // the screen on the arc page, takes page swipes
@@ -239,8 +248,8 @@ screen_ops_t screen_tgui_ops = {
 //                               "portrait" or "landscape"
 //   zone_width     = <number>   landscape: width of the key and encoder zones
 //                               as a fraction of the window (default 0.25)
-//   grid           = <boolean>  virtual 16x8 grid on a page of its own (default true)
-//   arc            = <boolean>  virtual arc on a page of its own (default true)
+//   grid           = <boolean>  virtual 16x8 grid on pages of its own (default true)
+//   arc            = <boolean>  virtual arc on pages of its own (default true)
 int screen_tgui_config(matron_io_t *io, lua_State *l) {
     screen_tgui_priv_t *priv = (screen_tgui_priv_t *)io->data;
     memset(priv, 0, sizeof(*priv));
@@ -705,6 +714,7 @@ static bool tgui_has_page(const tgui_state_t *st, int page) {
     case TGUI_PAGE_SCREEN:
         return true;
     case TGUI_PAGE_GRID:
+    case TGUI_PAGE_GRID_SCR:
         return st->landscape && tgui_grid_dev != NULL;
     case TGUI_PAGE_ARC:
     case TGUI_PAGE_RINGS:
@@ -827,40 +837,62 @@ static bool tgui_build_rings_page(tgui_state_t *st) {
     return true;
 }
 
-// The arc page: the four rings in a row with the screen above them, both in
-// a column in the middle, and the key and encoder zones in what is left at
-// the sides. The screen is narrower than the rings; strips fill its row.
-static bool tgui_build_arc_page(tgui_state_t *st) {
+// A page with a picture of the given size and the screen above it, both in a
+// column in the middle, and the key and encoder zones in what is left at the
+// sides. The screen takes the height the picture leaves and is narrower than
+// it; strips fill its row.
+static bool tgui_build_controls_page(tgui_state_t *st, int page, int side, tgui_view *key, tgui_view *enc,
+                                     tgui_view *scr, tgui_view *img, float w_dp, float h_dp, tgui_buffer *buf) {
     static const char *const key_label[3] = {"K1", "K2", "K3"};
     static const char *const enc_label[3] = {"E1", "E2", "E3"};
-    // ring diameter: leave the zones 72 dp each, and the screen over half
-    // of the height
-    float d_dp = (st->conf_w - 2 * 72) / (float)ARC_RINGS;
-    if (d_dp > st->conf_h * 0.45f) {
-        d_dp = st->conf_h * 0.45f;
-    }
-    float scr_dp = st->conf_h - d_dp;
+    float scr_dp = st->conf_h - h_dp;
     tgui_view_size scr_h = {TGUI_VIEW_SIZE, {TGUI_UNIT_DP, scr_dp}};
     tgui_view row, col, top;
-    if (!tgui_make_page(st, TGUI_PAGE_ARC, &row) ||
-        !tgui_make_zones(st, st->arc_key, &row, 1, key_label) ||
-        !tgui_centred_begin(st, &col, &row, ARC_RINGS * d_dp)) {
+    if (!tgui_make_page(st, page, &row) || !tgui_make_zones(st, key, &row, 1, key_label) ||
+        !tgui_centred_begin(st, &col, &row, w_dp)) {
         return false;
     }
     TGUI_TRY(tgui_create_linear_layout(st->c, st->a, &top, &col, TGUI_VIS_VISIBLE, true));
     TGUI_TRY(tgui_linear_params(st->c, st->a, top, 0, 0));
     TGUI_TRY(tgui_set_width(st->c, st->a, top, TGUI_FILL));
     TGUI_TRY(tgui_set_height(st->c, st->a, top, scr_h));
-    if (!tgui_make_side(st, &st->side[TGUI_SIDE_ARC][0], &top) ||
-        !tgui_make_picture(st, &st->arc_scr, &top, 2 * scr_dp, scr_dp, st->buf) ||
-        !tgui_make_side(st, &st->side[TGUI_SIDE_ARC][1], &top) ||
-        !tgui_make_picture(st, &st->arc_img, &col, 0, d_dp, st->arc_buf) ||
-        !tgui_centred_end(st, &col) ||
-        !tgui_make_zones(st, st->arc_enc, &row, 1, enc_label)) {
+    return tgui_make_side(st, &st->side[side][0], &top) &&
+           tgui_make_picture(st, scr, &top, 2 * scr_dp, scr_dp, st->buf) &&
+           tgui_make_side(st, &st->side[side][1], &top) && tgui_make_picture(st, img, &col, 0, h_dp, buf) &&
+           tgui_centred_end(st, &col) && tgui_make_zones(st, enc, &row, 1, enc_label);
+}
+
+// The grid with screen page: the grid below the screen, between the zones.
+static bool tgui_build_grid_scr_page(tgui_state_t *st) {
+    // grid height: leave the zones 72 dp each, and the screen the rest of
+    // the height
+    float h_dp = (st->conf_w - 2 * 72) / 2.f;
+    if (h_dp > st->conf_h * TGUI_GRID_SCR_SHARE) {
+        h_dp = st->conf_h * TGUI_GRID_SCR_SHARE;
+    }
+    if (!tgui_build_controls_page(st, TGUI_PAGE_GRID_SCR, TGUI_SIDE_GRID_SCR, st->gs_key, st->gs_enc, &st->gs_scr,
+                                  &st->gs_img, 2 * h_dp, h_dp, st->grid_buf)) {
+        return false;
+    }
+    st->gs_scr_px_per_dp = SCREEN_H * st->scale / (st->conf_h - h_dp);
+    tgui_grid_dirty = true;
+    return true;
+}
+
+// The arc page: the four rings in a row below the screen, between the zones.
+static bool tgui_build_arc_page(tgui_state_t *st) {
+    // ring diameter: leave the zones 72 dp each, and the screen over half
+    // of the height
+    float d_dp = (st->conf_w - 2 * 72) / (float)ARC_RINGS;
+    if (d_dp > st->conf_h * 0.45f) {
+        d_dp = st->conf_h * 0.45f;
+    }
+    if (!tgui_build_controls_page(st, TGUI_PAGE_ARC, TGUI_SIDE_ARC, st->arc_key, st->arc_enc, &st->arc_scr,
+                                  &st->arc_img, ARC_RINGS * d_dp, d_dp, st->arc_buf)) {
         return false;
     }
     st->arc_px_per_dp = SCREEN_W * st->scale / (ARC_RINGS * d_dp);
-    st->arc_scr_px_per_dp = SCREEN_H * st->scale / scr_dp;
+    st->arc_scr_px_per_dp = SCREEN_H * st->scale / (st->conf_h - d_dp);
     tgui_arc_dirty = true;
     return true;
 }
@@ -893,7 +925,7 @@ static bool tgui_build_landscape(tgui_state_t *st) {
     if (!tgui_weigh(st, st->gap, 1.f - 2.f * zone, true) || !tgui_make_zones(st, st->enc, &over, zone, NULL)) {
         return false;
     }
-    if (tgui_has_page(st, TGUI_PAGE_GRID) && !tgui_build_grid_page(st)) {
+    if (tgui_has_page(st, TGUI_PAGE_GRID) && !(tgui_build_grid_page(st) && tgui_build_grid_scr_page(st))) {
         return false;
     }
     return !tgui_has_page(st, TGUI_PAGE_ARC) || (tgui_build_arc_page(st) && tgui_build_rings_page(st));
@@ -929,12 +961,12 @@ static bool tgui_build_layout(tgui_state_t *st) {
     st->landscape = tgui_is_landscape(st);
     st->built_w = st->conf_w;
     st->built_h = st->conf_h;
-    st->gap = st->grid_img = st->arc_img = st->arc_scr = st->rings_img = -1;
+    st->gap = st->grid_img = st->gs_img = st->gs_scr = st->arc_img = st->arc_scr = st->rings_img = -1;
     for (int i = 0; i < TGUI_SIDES; i++) {
         st->side[i][0] = st->side[i][1] = -1;
     }
     for (int i = 0; i < 3; i++) {
-        st->arc_key[i] = st->arc_enc[i] = -1;
+        st->arc_key[i] = st->arc_enc[i] = st->gs_key[i] = st->gs_enc[i] = -1;
     }
     if (!tgui_has_page(st, st->page)) {
         st->page = TGUI_PAGE_SCREEN;
@@ -1076,7 +1108,7 @@ static const tgui_touch_pointer *tgui_event_pointer(const tgui_event *ev) {
     return i < ev->touch.events * n ? &ev->touch.pointers[i / n][i % n] : NULL;
 }
 
-// All fingers on the grid arrive here. A finger holds the cell it landed on
+// All fingers on the grid arrive here, from either page that shows it. A finger holds the cell it landed on
 // until it lifts; sliding does not move it to the next cell.
 static void tgui_handle_grid_touch(tgui_state_t *st, const tgui_event *ev) {
     tgui_touches_t *t = &st->grid_touch;
@@ -1224,7 +1256,7 @@ static void tgui_handle_arc_touch(tgui_state_t *st, const tgui_event *ev, float 
 // rings, so that a touch that misses their edge in the middle of playing does
 // not turn the page.
 static void tgui_handle_side_touch(tgui_state_t *st, int n, int side, const tgui_event *ev) {
-    const tgui_touches_t *t = n == TGUI_SIDE_GRID ? &st->grid_touch : &st->arc_touch;
+    const tgui_touches_t *t = n == TGUI_SIDE_GRID || n == TGUI_SIDE_GRID_SCR ? &st->grid_touch : &st->arc_touch;
     switch (ev->touch.action) {
     case TGUI_TOUCH_DOWN:
         st->side_down[n][side] = true;
@@ -1247,8 +1279,8 @@ static void tgui_handle_side_touch(tgui_state_t *st, int n, int side, const tgui
     }
 }
 
-// The middle of the screen page, and the screen on the arc page, only watch
-// for the page swipe.
+// The middle of the screen page, and the small screen on the pages that have
+// one, only watch for the page swipe.
 static void tgui_handle_gap_touch(tgui_state_t *st, const tgui_event *ev, float px_per_dp) {
     tgui_touches_t *t = &st->gap_touch;
     const tgui_touch_pointer *p = tgui_event_pointer(ev);
@@ -1287,13 +1319,13 @@ static void tgui_handle_touch(tgui_state_t *st, const tgui_event *ev) {
     tgui_touch_action action = ev->touch.action;
     if (st->priv->debug && action != TGUI_TOUCH_MOVE) {
         fprintf(stderr, "screen:tgui touch view=%d%s action=%d index=%u events=%u pointers=%u:", id,
-                id == st->grid_img ? " (grid)" : (id == st->arc_img || id == st->rings_img ? " (arc)" : (id == st->gap ? " (gap)" : "")), (int)action, ev->touch.index,
+                id == st->grid_img || id == st->gs_img ? " (grid)" : (id == st->arc_img || id == st->rings_img ? " (arc)" : (id == st->gap ? " (gap)" : "")), (int)action, ev->touch.index,
                 ev->touch.events, ev->touch.num_pointers);
         for (uint32_t k = 0; k < ev->touch.events * ev->touch.num_pointers; k++) {
             const tgui_touch_pointer *p = &ev->touch.pointers[k / ev->touch.num_pointers][k % ev->touch.num_pointers];
             fprintf(stderr, " #%d %d,%d", p->id, p->x, p->y);
         }
-        const tgui_touches_t *t = id == st->grid_img ? &st->grid_touch : (id == st->gap ? &st->gap_touch : NULL);
+        const tgui_touches_t *t = id == st->grid_img || id == st->gs_img ? &st->grid_touch : (id == st->gap ? &st->gap_touch : NULL);
         for (int i = 0; t && i < TGUI_MAX_PTR; i++) {
             if (t->p[i].id != -1) {
                 fprintf(stderr, " [#%d moved %d,%d]", t->p[i].id, t->p[i].x - t->p[i].sx, t->p[i].y - t->p[i].sy);
@@ -1304,7 +1336,7 @@ static void tgui_handle_touch(tgui_state_t *st, const tgui_event *ev) {
     if (ev->touch.events == 0 || ev->touch.num_pointers == 0) {
         return;
     }
-    if (id == st->grid_img) {
+    if (id == st->grid_img || id == st->gs_img) {
         tgui_handle_grid_touch(st, ev);
         return;
     }
@@ -1312,8 +1344,10 @@ static void tgui_handle_touch(tgui_state_t *st, const tgui_event *ev) {
         tgui_handle_arc_touch(st, ev, id == st->arc_img ? st->arc_px_per_dp : st->rings_px_per_dp);
         return;
     }
-    if (id == st->gap || id == st->arc_scr) {
-        tgui_handle_gap_touch(st, ev, id == st->gap ? st->density : st->arc_scr_px_per_dp);
+    if (id == st->gap || id == st->arc_scr || id == st->gs_scr) {
+        tgui_handle_gap_touch(st, ev,
+                              id == st->gap ? st->density
+                                            : (id == st->arc_scr ? st->arc_scr_px_per_dp : st->gs_scr_px_per_dp));
         return;
     }
     for (int n = 0; n < TGUI_SIDES; n++) {
@@ -1325,7 +1359,7 @@ static void tgui_handle_touch(tgui_state_t *st, const tgui_event *ev) {
         }
     }
     for (int i = 0; i < 3; i++) {
-        if (id == st->key[i] || id == st->arc_key[i]) {
+        if (id == st->key[i] || id == st->arc_key[i] || id == st->gs_key[i]) {
             bool down = st->key_down[i];
             if (action == TGUI_TOUCH_DOWN) {
                 down = true;
@@ -1338,7 +1372,7 @@ static void tgui_handle_touch(tgui_state_t *st, const tgui_event *ev) {
             }
             return;
         }
-        if (id == st->enc[i] || id == st->arc_enc[i]) {
+        if (id == st->enc[i] || id == st->arc_enc[i] || id == st->gs_enc[i]) {
             if (action == TGUI_TOUCH_DOWN) {
                 const tgui_touch_pointer *p = &ev->touch.pointers[0][0];
                 st->enc_ptr[i] = p->id;
@@ -1627,6 +1661,7 @@ static void *screen_tgui_loop(void *data) {
         tgui_view img[2] = {-1, -1};
         bool opening = false;
         int page = TGUI_PAGE_SCREEN;
+        int what = -1; // TGUI_PAGE_GRID or TGUI_PAGE_ARC: the picture this page has
         tgui_activity a = -1;
 
         pthread_mutex_lock(&st->lock);
@@ -1647,12 +1682,17 @@ static void *screen_tgui_loop(void *data) {
             }
             page = st->page;
             if (ok && st->visible) {
-                // the arc page shows the screen as well
+                static const int second[TGUI_PAGES] = {-1, TGUI_PAGE_GRID, TGUI_PAGE_GRID, TGUI_PAGE_ARC,
+                                                       TGUI_PAGE_ARC};
+                const tgui_view scr[TGUI_PAGES] = {st->img, -1, st->gs_scr, st->arc_scr, -1};
+                const tgui_view pic[TGUI_PAGES] = {-1, st->grid_img, st->gs_img, st->arc_img, st->rings_img};
+                // two of the pages show the screen as well
                 a = st->a;
-                img[0] = page == TGUI_PAGE_SCREEN ? st->img : st->arc_scr;
-                img[1] = page == TGUI_PAGE_GRID ? st->grid_img : (page == TGUI_PAGE_ARC ? st->arc_img : st->rings_img);
-                present[0] = (page == TGUI_PAGE_SCREEN || page == TGUI_PAGE_ARC) && priv->dirty;
-                present[1] = page == TGUI_PAGE_GRID ? tgui_grid_dirty : (page != TGUI_PAGE_SCREEN && tgui_arc_dirty);
+                what = second[page];
+                img[0] = scr[page];
+                img[1] = pic[page];
+                present[0] = img[0] != -1 && priv->dirty;
+                present[1] = what == TGUI_PAGE_GRID ? tgui_grid_dirty : (what == TGUI_PAGE_ARC && tgui_arc_dirty);
             }
         }
         pthread_mutex_unlock(&st->lock);
@@ -1661,7 +1701,7 @@ static void *screen_tgui_loop(void *data) {
             ok = tgui_present(st, a, TGUI_PAGE_SCREEN, img[0]);
         }
         if (ok && present[1]) {
-            ok = tgui_present(st, a, page == TGUI_PAGE_GRID ? TGUI_PAGE_GRID : TGUI_PAGE_ARC, img[1]);
+            ok = tgui_present(st, a, what, img[1]);
         }
         if (!ok || st->lost) {
             tgui_disconnect(st);

@@ -325,6 +325,12 @@ crone still connects to `system:playback_*` as on any norns.
   backend), so scripts use it through `grid.connect()` unchanged. Rotation,
   intensity and tilt are ignored. A finger holds the cell it lands on until
   it lifts; sliding does not retrigger.
+- **Grid with screen.** The page after the grid shows both, laid out like
+  the arc page: a smaller grid (`TGUI_GRID_SCR_SHARE`, 0.6 of the window
+  height, so cells of about 26 dp on the S23+) with a smaller copy of the
+  norns screen above it, and labelled K1-K3 / E1-E3 zones at the sides.
+  Same grid buffer and touch handling as the grid page. Looked at by hand
+  on the S23+.
 - **Virtual arc.** Two more landscape pages show it. The arc page: four
   rings of 64 leds in a row (a 4:1 buffer of their own; led 1 is at the
   top), a smaller copy of the norns screen above them, and labelled K1-K3
@@ -340,18 +346,18 @@ crone still connects to `system:playback_*` as on any norns.
   the centre. A touch under 300 ms that stays within 8 dp is the ring's
   key (press and release sent together on lift). Several rings can be
   turned at once.
-- Switching pages: the pages are a ring, screen - grid - arc - rings (only
-  those that exist: `grid = false` drops the grid, `arc = false` the last
-  two). A sideways swipe
+- Switching pages: the pages are a ring, screen - grid - grid with screen -
+  arc - rings (only those that exist: `grid = false` drops the two grid
+  pages, `arc = false` the last two). A sideways swipe
   (80 dp, any number of fingers) on the screen picture, which on the screen
   page means its middle part between the zones, goes to the next page when
   it is leftwards and to the previous one when rightwards. A tap on an
   encoder zone (under 300 ms, within 8 dp, no encoder step sent) goes to
-  the next page, on the arc page too. On the grid and rings pages, a tap on
+  the next page, on the grid with screen and arc pages too. On the grid and rings pages, a tap on
   the strip right of the picture (dark grey, out to the window edges, at
   least 32 dp wide; the picture shrinks to leave them) goes to the next
-  page, on the left strip to the previous one. The arc page has the same
-  two strips beside its small screen, between it and the zones. Back goes
+  page, on the left strip to the previous one. The grid with screen and arc
+  pages have the same two strips beside their small screen. Back goes
   to the screen. The strips are
   weighted children of a row, not sized from the configuration: the full
   screen window is wider than `screen_width` says. The tap counts on
