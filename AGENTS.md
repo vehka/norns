@@ -229,7 +229,7 @@ Installed in `~/dust/code` and enabled in `~/dust/data/system.mods`:
 | `modhousekeeper` | `vehka/modhousekeeper`, branch `fix-submodules` | mod manager; clones mods with their submodules |
 | `nbout` | `sixolet/nbout` | MIDI device `17: nb` that plays an nb voice |
 
-Scripts: `awake` and `vehka/takt` (engine `Timber_Takt`, which needs
+Scripts: `awake`, `lylepmills/buoys` (softcut, grid and arc) and `vehka/takt` (engine `Timber_Takt`, which needs
 `JPverb` and `Decimator` from sc3-plugins; used by hand with the virtual
 grid).
 
@@ -318,38 +318,66 @@ crone still connects to `system:playback_*` as on any norns.
   its two ends: K1-K3 stacked on the left, E1-E3 on the right, each
   `zone_width` (default 0.25) of the window wide. The zones cover part of
   the screen picture; the middle takes no touches.
-- **Virtual grid.** In landscape there is a second page with a 16x8 grid
+- **Virtual grid.** In landscape there is a page with a 16x8 grid
   drawn into its own shared buffer. matron sees it as a monome device
   (`dev_monome_new_virtual_grid()` in `device_monome.cc`: a `dev_monome`
   with no libmonome handle, whose `refresh` hands the led data to the
   backend), so scripts use it through `grid.connect()` unchanged. Rotation,
   intensity and tilt are ignored. A finger holds the cell it lands on until
   it lifts; sliding does not retrigger.
-- Switching pages: on the screen page, a sideways swipe (80 dp, either
-  direction, any number of fingers) in the middle part between the zones
-  shows the grid, and so does a tap on an encoder zone (under 300 ms,
-  within 8 dp, no encoder step sent). On the grid page, a tap on the strip
-  left or right of the grid (dark grey, out to the window edges, at least
-  32 dp wide; the grid shrinks to leave them) goes back, and so does back.
-  The strips are weighted children of a row, not sized from the
-  configuration: the full screen window is wider than `screen_width` says. The tap counts on release, and not when it
-  started with a finger on the grid. The grid itself takes no gestures:
-  every touch on it is a key press.
-- **Next: a virtual arc**, as a third landscape page. Nothing is written.
-  Where it would hook in: `dev_monome_new_virtual_grid()` is the model for
-  a virtual device (type `DEVICE_MONOME_TYPE_ARC`; led data for
-  `virtual_refresh` comes through `dev_monome_arc_set_led()`), and input
-  is `EVENT_ARC_ENCODER_DELTA` / `EVENT_ARC_ENCODER_KEY`, posted the way
-  `tgui_post_grid_key()` posts keys. In `tgui.cc` the pages are
-  `TGUI_PAGE_*`, `page_view[]`, `want_page` and `tgui_turn_page()`, all
-  written for exactly two pages; the encoder-zone tap and the side strips
-  each go to one fixed page and need a rule for three. Keep the lesson of
-  the grid: a surface that sends input on touch down cannot also take
-  gestures, so page changes belong on areas that do nothing else.
+- **Virtual arc.** Two more landscape pages show it. The arc page: four
+  rings of 64 leds in a row (a 4:1 buffer of their own; led 1 is at the
+  top), a smaller copy of the norns screen above them, and labelled K1-K3
+  / E1-E3 zones in what is left at the sides, which work as on the screen
+  page. The rings page: only the rings, as large as they fit, between two
+  strips like the grid. matron sees a monome
+  device made by `dev_monome_new_virtual_arc()`. Its name has to start
+  with `monome arc`: that is how `_norns.monome.add` in
+  `lua/core/startup.lua` tells an arc from a grid. A finger turns the ring
+  it landed on by the angle it moves around that ring's centre, wherever
+  it goes afterwards, 1024 ticks to the turn like the device
+  (`ARC_TICKS`); clockwise is positive, and nothing is counted right at
+  the centre. A touch under 300 ms that stays within 8 dp is the ring's
+  key (press and release sent together on lift). Several rings can be
+  turned at once.
+- Switching pages: the pages are a ring, screen - grid - arc - rings (only
+  those that exist: `grid = false` drops the grid, `arc = false` the last
+  two). A sideways swipe
+  (80 dp, any number of fingers) on the screen picture, which on the screen
+  page means its middle part between the zones, goes to the next page when
+  it is leftwards and to the previous one when rightwards. A tap on an
+  encoder zone (under 300 ms, within 8 dp, no encoder step sent) goes to
+  the next page, on the arc page too. On the grid and rings pages, a tap on
+  the strip right of the picture (dark grey, out to the window edges, at
+  least 32 dp wide; the picture shrinks to leave them) goes to the next
+  page, on the left strip to the previous one. The arc page has the same
+  two strips beside its small screen, between it and the zones. Back goes
+  to the screen. The strips are
+  weighted children of a row, not sized from the configuration: the full
+  screen window is wider than `screen_width` says. The tap counts on
+  release, and not when it started with a finger on the grid or the rings. The grid and
+  the rings themselves take no page gestures: a surface that sends input
+  on touch down cannot also take gestures, so page changes belong on areas
+  that do nothing else.
+- The grid and the arc column are centred in the window by spaces above
+  and below them (`tgui_centred_begin()` / `_end()`); a row does not
+  centre its children by itself, and the first version sat at the top.
+  Sideways the picture sat about 33 dp right of the middle of the display
+  in a screenshot from the S23+ (269 px free on the left, 175 px on the
+  right). Probably the plugin lays the window out without the camera
+  cutout at that end; not confirmed, and the library has no call for it.
+- Arc state: the rings draw and turn by touch, and the arc page with keys,
+  encoders and screen has been used by hand (with `lylepmills/buoys`).
+  The strips beside its small screen and the rings page build without
+  errors; nobody has looked at them yet. buoys is softcut only and plays samples from a
+  folder chosen in its meta mode; `~/dust/audio` has none, so it is silent
+  here.
 - The grid shows up as `tgui grid tgui` in SYSTEM > DEVICES > GRID. It is
   not put on a port by itself (the add event comes before `system.state` is
   read, which then names the ports); here port 1 was set once with
   `grid.vports[1].name = "tgui grid tgui"; grid.update_devices(); norns.state.save()`.
+  The arc is `monome arc tgui` under SYSTEM > DEVICES > ARC, set the same
+  way through `arc.vports[1]`.
 - **Multi-touch events are not laid out as `types.h` says.** With two
   fingers on one view the plugin sends `events = 2, num_pointers = 1`: one
   row per finger, and `index` counts through the rows. Code that reads
@@ -361,7 +389,8 @@ crone still connects to `system:playback_*` as on any norns.
 - Grid state: tried by hand with `awake`. Taps map to the right cells
   (corner pad = 16,8) and the script reacts, chords included. Page switching
   (swipe, encoder-zone tap, side strips out to the edges) has been used by
-  hand too. Holds have not been looked at. The
+  hand too (before the arc page was added, which changed where the swipes
+  and strips lead). Holds have not been looked at. The
   picture is sized from the window height reported with the system bars
   showing (354 dp on the S23+), so it may sit a little short of the bottom
   edge. `grid = false` in the options turns it off.
@@ -381,7 +410,7 @@ crone still connects to `system:playback_*` as on any norns.
 - Keys follow touch down/up, so holding K1 works. Encoders are drag pads:
   right or up is clockwise, one step per `enc_step_dp` (default 12) of
   travel. They post `EVENT_SDL_ENC`, i.e. exact steps with no acceleration.
-- Options: `_boot.add_io('screen:tgui', {enc_step_dp = 12, keep_screen_on = true, debug = false, orientation = "auto", zone_width = 0.25, grid = true})`.
+- Options: `_boot.add_io('screen:tgui', {enc_step_dp = 12, keep_screen_on = true, debug = false, orientation = "auto", zone_width = 0.25, grid = true, arc = true})`.
 - `tgui_get_dimensions()` returns `TGUI_ERR_MESSAGE` for a view that has
   not been laid out yet, so it is no use while building a layout. It works
   a few hundred ms later.

@@ -54,6 +54,10 @@ extern void dev_monome_tilt_disable(struct dev_monome *md, uint8_t val);
 // and the owner posts the key events itself
 extern struct dev_monome *dev_monome_new_virtual_grid(int cols, int rows, const char *serial, const char *name,
                                                       void (*refresh)(struct dev_monome *md));
+// the same for an arc: four rings of 64 leds in `data`. Lua takes a monome
+// device for an arc when its name starts with "monome arc"
+extern struct dev_monome *dev_monome_new_virtual_arc(const char *serial, const char *name,
+                                                     void (*refresh)(struct dev_monome *md));
 
 // device management
 extern int dev_monome_init(void *self);

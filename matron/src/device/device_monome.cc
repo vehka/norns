@@ -94,8 +94,8 @@ int dev_monome_init(void *self) {
     return 0;
 }
 
-struct dev_monome *dev_monome_new_virtual_grid(int cols, int rows, const char *serial, const char *name,
-                                               void (*refresh)(struct dev_monome *md)) {
+static struct dev_monome *dev_monome_new_virtual(device_monome_type_t type, int cols, int rows, const char *serial,
+                                                 const char *name, void (*refresh)(struct dev_monome *md)) {
     struct dev_monome *md = (struct dev_monome *)calloc(1, sizeof(struct dev_monome));
     if (!md) {
         return NULL;
@@ -104,14 +104,24 @@ struct dev_monome *dev_monome_new_virtual_grid(int cols, int rows, const char *s
     md->dev.id = dev_list_new_id();
     md->dev.serial = strdup(serial);
     md->dev.name = strdup(name);
-    md->type = DEVICE_MONOME_TYPE_GRID;
+    md->type = type;
     md->cols = cols;
     md->rows = rows;
-    md->quads = (rows * cols) / 64;
+    md->quads = type == DEVICE_MONOME_TYPE_ARC ? 4 : (rows * cols) / 64;
     memcpy(md->quad_xoff, quad_xoff, sizeof(quad_xoff));
     memcpy(md->quad_yoff, quad_yoff, sizeof(quad_yoff));
     md->virtual_refresh = refresh;
     return md;
+}
+
+struct dev_monome *dev_monome_new_virtual_grid(int cols, int rows, const char *serial, const char *name,
+                                               void (*refresh)(struct dev_monome *md)) {
+    return dev_monome_new_virtual(DEVICE_MONOME_TYPE_GRID, cols, rows, serial, name, refresh);
+}
+
+struct dev_monome *dev_monome_new_virtual_arc(const char *serial, const char *name,
+                                              void (*refresh)(struct dev_monome *md)) {
+    return dev_monome_new_virtual(DEVICE_MONOME_TYPE_ARC, 0, 0, serial, name, refresh);
 }
 
 // calculate quadrant number given x/y
