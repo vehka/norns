@@ -19,6 +19,9 @@
 
 #include <jack/jack.h>
 #include <sstream>
+#ifdef __ANDROID__
+#include <sys/resource.h>
+#endif
 
 #include "Commands.h"
 
@@ -73,6 +76,15 @@ class Client {
 
     static int callback(jack_nframes_t numFrames, void *data) {
         auto *self = (Client *)(data);
+#ifdef __ANDROID__
+        // jack cannot give its threads real-time scheduling in an android
+        // app; the best there is for the audio thread is the lowest nice
+        static thread_local bool raised = false;
+        if (!raised) {
+            setpriority(PRIO_PROCESS, 0, -20);
+            raised = true;
+        }
+#endif
         self->preProcess(numFrames);
         self->process(numFrames);
         return 0;

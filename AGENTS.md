@@ -200,12 +200,13 @@ points here. Any thread that something will `pthread_cancel` (and especially
 
 ## Known limits
 
-- **No audio input.** The dummy driver's `system:capture_*` ports are
-  silent. (`jackd -d opensles` came up playback-only, and `-C 2` made it
-  fail to initialise; probably Termux lacks the microphone permission,
-  unconfirmed.) An AAudio input stream in `jack-aaudio` would be the way in.
-- **Latency.** 48 kHz, 960-frame periods plus a 60 ms output buffer (see
-  Audio output), no real-time priority.
+- **No audio input.** There are no capture ports. (`jackd -d opensles`
+  came up playback-only, and `-C 2` made it fail to initialise; probably
+  Termux lacks the microphone permission, unconfirmed.) An AAudio input
+  stream in `jack-aaudio`, with physical `capture_*` ports, would be the
+  way in.
+- **Latency.** About 30 ms of buffering at 48 kHz (see Audio output), set
+  by how long Android stalls threads that have no real-time priority.
 - **No hardware devices** (USB MIDI, HID, grid, crow) without root. The plan
   is OSC control, TouchOSC for grid emulation, and Bluetooth MIDI from the
   `feat/bl-midi` branch (8 commits ahead of `main`, not merged here; its
@@ -282,27 +283,55 @@ emplaitress.
 
 ## Audio output
 
-`start.sh` runs `jackd -d dummy -m` (a timer-driven server with monitor
-ports) and `termux/jack-aaudio.c`, a JACK client that copies
-`system:monitor_*` into a ring buffer played by an AAudio callback stream.
-crone still connects to `system:playback_*` as on any norns.
+`start.sh` runs `jackd -d dummy -C 0 -P 0` and `termux/jack-aaudio.c`, a
+JACK client whose `aaudio:playback_*` ports (marked physical, so crone
+connects to them as to any sound card) feed a ring buffer played by an
+AAudio callback stream.
 
-- Why: Termux's own driver (`jackd -d opensles`) crackles. It keeps two
-  OpenSL buffers queued, so one late cycle is an audible dropout that JACK
-  does not count as an xrun, and JACK cycles here are regularly late (no
-  real-time scheduling; 25-80 ms gaps seen against a 20 ms period).
-  `NORNS_JACK_DRIVER=opensles termux/start.sh` goes back to it.
-- `NORNS_AUDIO_BUFFER_MS` (default 60) is the ring's target fill, i.e. how
-  late a cycle may be; `NORNS_JACK_PERIOD` (default 960) is the JACK period.
-- `aaudio.log` gets a line whenever the underrun/overrun counters change.
-  An underrun plays silence until the ring is back at the target. Overruns
-  are the slow drift between the timer and the audio device being corrected
-  by skipping ahead. Seen: a few underruns while a script loads, none in 45 s
-  of `awake` playing. Not yet judged by ear.
+- **The audio device is the clock.** `jack-aaudio` puts jackd into
+  freewheel, where it runs cycles as fast as the clients allow, and blocks
+  in its process callback until the device has played the ring down to
+  `NORNS_AUDIO_BUFFER_MS` (default 20). So JACK runs at the device's rate,
+  and after a late cycle it catches up by itself. The dummy driver's timer
+  does nothing after that.
+- Why this shape: an Android app cannot have real-time threads
+  (`ulimit -r` is 0); only the AAudio callback thread gets `SCHED_FIFO`.
+  jackd, scsynth and crone are normal threads at nice -20 (`start.sh`,
+  `crone/src/Client.h`) and get stalled now and then, 5-20 ms a few times
+  a minute, at any nice level. The buffer has to cover the longest stall;
+  that is what sets the latency, not the JACK period
+  (`NORNS_JACK_PERIOD`, default 256).
+- **Nothing may connect to `system:*` ports in freewheel.** jackd does not
+  service its own driver's ports there, and a client that depends on them
+  never finishes its cycle: the graph stops and new clients time out
+  (`Driver is not running`, matron dies on `Cannot open matron-clock
+  client`). Hence `-C 0 -P 0`.
+- `NORNS_AUDIO_STATS_S=10 termux/start.sh` logs the ring's fill range
+  every 10 s in `aaudio.log` (`fill 352..1216`: frames left after the
+  worst read, and the most there was). An underrun line means a stall
+  longer than the buffer: a burst of silence, no other harm.
+- Measured on the S23+: `awake` playing for 45 s, no underruns, lowest
+  fill 192 frames (4 ms left of the 20). Played by hand with `plonky`
+  (MxSamples) for about 100 minutes: 111 underruns in that time, script
+  loads included, and it sounded solid.
+- `NORNS_AUDIO_CLOCK=timer` is the older way: jackd on its timer in sync
+  mode (`-S -d dummy -m`), `jack-aaudio` reading `system:monitor_*` through
+  a resampler that follows the ring's fill level, since the two clocks
+  differ. The timer driver drops the time by which a cycle is more than a
+  period late, which drains the ring; it underran at 20 ms where the
+  device clock does not.
+- Before either, jackd ran async with 960-frame periods and a 60 ms ring
+  that drifted up to 160 ms before skipping: about 150 ms in all, with a
+  click for every late client and every skip.
+- `NORNS_JACK_DRIVER=opensles termux/start.sh` goes back to Termux's own
+  driver, which crackles: it keeps two OpenSL buffers queued, so one late
+  cycle is an audible dropout.
+- The AAudio buffer is two bursts (192 frames); a burst is added when the
+  device reports an underrun (`device underruns` in `aaudio.log`).
 - It reopens the stream when Android reports an error (output device
   change); not exercised.
-- `jack_frame_time()` is stuck at 0 with this driver too, hence the
-  `CLOCK_MONOTONIC` change in `jack_client.cpp`.
+- `jack_frame_time()` is stuck at 0 here, hence the `CLOCK_MONOTONIC`
+  change in `jack_client.cpp`.
 
 ## The screen: Termux:GUI
 
