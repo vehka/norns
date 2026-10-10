@@ -16,9 +16,9 @@
 //     +--------+--------+
 //
 // In landscape there is a second page with a virtual 16x8 monome grid, which
-// scripts see as an ordinary grid device. A two-finger sideways swipe (on the
-// grid, or on the middle of the screen page) switches pages; back returns
-// from the grid to the screen.
+// scripts see as an ordinary grid device. A sideways swipe on the middle of
+// the screen page, or a tap on an encoder zone, shows it; a tap on the strips
+// beside the grid, or back, returns to the screen.
 //
 // The layout follows the rotation of the device unless `orientation` fixes
 // it. Keys follow touch down/up, so holding works. Encoders are drag pads:
@@ -56,6 +56,11 @@
 #define GRID_ROWS 8
 #define TGUI_MAX_PTR 10
 #define TGUI_SWIPE_DP 80
+// least width of the strips beside the grid
+#define TGUI_SIDE_MIN_DP 32
+// a touch on an encoder zone that stays this near and this short is a tap
+#define TGUI_TAP_DP 8
+#define TGUI_TAP_MS 300
 
 enum { TGUI_PAGE_SCREEN = 0, TGUI_PAGE_GRID };
 
@@ -129,6 +134,8 @@ typedef struct {
     tgui_view page_view[2];
     tgui_view gap;           // middle of the screen page, takes page swipes
     tgui_view grid_img;
+    tgui_view grid_side[2];  // strips left and right of the grid, a tap turns the page
+    bool side_down[2];
     float grid_cell_px;
     tgui_touches_t gap_touch, grid_touch;
     uint8_t grid_held[GRID_ROWS][GRID_COLS]; // fingers on each cell
@@ -139,6 +146,9 @@ typedef struct {
     int enc_ptr[3]; // tracked pointer id, -1 when not touched
     int enc_x[3], enc_y[3];
     float enc_acc[3];
+    int enc_sx[3], enc_sy[3]; // where the touch began
+    struct timespec enc_t0[3];
+    bool enc_tap[3];          // the touch has not moved or turned the encoder yet
     float enc_step_px;
 } tgui_state_t;
 
@@ -388,8 +398,8 @@ static int tgui_touches_add(tgui_touches_t *t, const tgui_touch_pointer *p) {
     return i;
 }
 
-// Takes the positions of a move event. True, once per gesture, when exactly
-// two fingers have both travelled sideways in the same direction.
+// Takes the positions of a move event. True, once per gesture, when all the
+// fingers down have travelled sideways in the same direction.
 static bool tgui_touches_move(tgui_touches_t *t, const tgui_event *ev, float swipe_px) {
     int n = 0, right = 0, left = 0;
     // (later entries of a pointer are newer)
@@ -416,7 +426,7 @@ static bool tgui_touches_move(tgui_touches_t *t, const tgui_event *ev, float swi
             left++;
         }
     }
-    if (t->swiped || n != 2 || (right != 2 && left != 2)) {
+    if (t->swiped || n == 0 || (right != n && left != n)) {
         return false;
     }
     t->swiped = true;
@@ -447,6 +457,7 @@ static void tgui_release_all(tgui_state_t *st) {
         }
         st->enc_ptr[i] = -1;
     }
+    st->side_down[0] = st->side_down[1] = false;
     tgui_grid_lift_all(st);
     tgui_touches_reset(&st->grid_touch);
     tgui_touches_reset(&st->gap_touch);
@@ -592,23 +603,41 @@ static bool tgui_has_grid(const tgui_state_t *st) {
 }
 
 // The grid page: one image, 2:1 like the grid, as large as the window allows
-// and centred.
+// and centred, with a strip on either side that takes the tap back to the
+// screen page.
 static bool tgui_build_grid_page(tgui_state_t *st) {
     tgui_view *page = &st->page_view[TGUI_PAGE_GRID];
-    float h_dp = st->conf_h < st->conf_w / 2.f ? st->conf_h : st->conf_w / 2.f;
-    float left_dp = (st->conf_w - 2 * h_dp) / 2;
+    float max_h_dp = (st->conf_w - 2 * TGUI_SIDE_MIN_DP) / 2.f;
+    float h_dp = st->conf_h < max_h_dp ? st->conf_h : max_h_dp;
+    tgui_view row;
     tgui_view_size w = {TGUI_VIEW_SIZE, {TGUI_UNIT_DP, 2 * h_dp}};
     tgui_view_size h = {TGUI_VIEW_SIZE, {TGUI_UNIT_DP, h_dp}};
     TGUI_TRY(tgui_create_frame_layout(st->c, st->a, page, &st->root,
                                       st->page == TGUI_PAGE_GRID ? TGUI_VIS_VISIBLE : TGUI_VIS_GONE));
     TGUI_TRY(tgui_set_width(st->c, st->a, *page, TGUI_FILL));
     TGUI_TRY(tgui_set_height(st->c, st->a, *page, TGUI_FILL));
-    TGUI_TRY(tgui_create_image_view(st->c, st->a, &st->grid_img, page, TGUI_VIS_VISIBLE, false));
-    TGUI_TRY(tgui_set_width(st->c, st->a, st->grid_img, w));
-    TGUI_TRY(tgui_set_height(st->c, st->a, st->grid_img, h));
-    TGUI_TRY(tgui_set_margin(st->c, st->a, st->grid_img, {TGUI_UNIT_DP, left_dp}, TGUI_DIR_LEFT));
-    TGUI_TRY(tgui_set_buffer(st->c, st->a, st->grid_img, st->grid_buf));
-    TGUI_TRY(tgui_send_touch_event(st->c, st->a, st->grid_img, true));
+    // the strips share what is left of the row, whatever the real width of
+    // the window is (full screen, it is wider than the configuration says)
+    TGUI_TRY(tgui_create_linear_layout(st->c, st->a, &row, page, TGUI_VIS_VISIBLE, true));
+    TGUI_TRY(tgui_set_width(st->c, st->a, row, TGUI_FILL));
+    TGUI_TRY(tgui_set_height(st->c, st->a, row, TGUI_FILL));
+    for (int i = 0; i < 2; i++) {
+        tgui_view *v = &st->grid_side[i];
+        TGUI_TRY(tgui_create_text_view(st->c, st->a, v, &row, TGUI_VIS_VISIBLE, "", false, false));
+        if (!tgui_weigh(st, *v, 1, true)) {
+            return false;
+        }
+        TGUI_TRY(tgui_background_color(st->c, st->a, *v, 0xff161616));
+        TGUI_TRY(tgui_send_touch_event(st->c, st->a, *v, true));
+        if (i == 0) {
+            TGUI_TRY(tgui_create_image_view(st->c, st->a, &st->grid_img, &row, TGUI_VIS_VISIBLE, false));
+            TGUI_TRY(tgui_linear_params(st->c, st->a, st->grid_img, 0, 0));
+            TGUI_TRY(tgui_set_width(st->c, st->a, st->grid_img, w));
+            TGUI_TRY(tgui_set_height(st->c, st->a, st->grid_img, h));
+            TGUI_TRY(tgui_set_buffer(st->c, st->a, st->grid_img, st->grid_buf));
+            TGUI_TRY(tgui_send_touch_event(st->c, st->a, st->grid_img, true));
+        }
+    }
     // touches on an image view come in pixels of its buffer, not of the view
     st->grid_cell_px = 8 * st->scale;
     tgui_grid_dirty = true;
@@ -676,7 +705,7 @@ static bool tgui_build_layout(tgui_state_t *st) {
     st->landscape = tgui_is_landscape(st);
     st->built_w = st->conf_w;
     st->built_h = st->conf_h;
-    st->gap = st->grid_img = -1;
+    st->gap = st->grid_img = st->grid_side[0] = st->grid_side[1] = -1;
     if (!tgui_has_grid(st)) {
         st->page = TGUI_PAGE_SCREEN;
     }
@@ -822,7 +851,7 @@ static void tgui_handle_grid_touch(tgui_state_t *st, const tgui_event *ev) {
         tgui_touches_reset(t);
         // fall through
     case TGUI_TOUCH_POINTER_DOWN:
-        if (p && !t->swiped && (i = tgui_touches_add(t, p)) >= 0) {
+        if (p && (i = tgui_touches_add(t, p)) >= 0) {
             int cx = (int)(p->x / st->grid_cell_px), cy = (int)(p->y / st->grid_cell_px);
             if (p->x >= 0 && p->y >= 0 && cx < GRID_COLS && cy < GRID_ROWS) {
                 t->p[i].cx = cx;
@@ -847,11 +876,33 @@ static void tgui_handle_grid_touch(tgui_state_t *st, const tgui_event *ev) {
         tgui_grid_lift_all(st);
         tgui_touches_reset(t);
         break;
-    case TGUI_TOUCH_MOVE:
-        if (tgui_touches_move(t, ev, TGUI_SWIPE_DP * st->density)) {
-            tgui_grid_lift_all(st);
+    default:
+        break;
+    }
+}
+
+// A strip beside the grid: a tap goes back to the screen page. Not while a
+// finger is on the grid, so that a touch that misses the outer columns in
+// the middle of playing does not turn the page.
+static void tgui_handle_side_touch(tgui_state_t *st, int side, const tgui_event *ev) {
+    switch (ev->touch.action) {
+    case TGUI_TOUCH_DOWN:
+        st->side_down[side] = true;
+        for (int i = 0; i < TGUI_MAX_PTR; i++) {
+            if (st->grid_touch.p[i].id != -1) {
+                st->side_down[side] = false;
+            }
+        }
+        break;
+    case TGUI_TOUCH_UP:
+        if (st->side_down[side]) {
             st->want_page = TGUI_PAGE_SCREEN;
         }
+        // fall through
+    case TGUI_TOUCH_CANCEL:
+        st->side_down[side] = false;
+        break;
+    default:
         break;
     }
 }
@@ -917,6 +968,12 @@ static void tgui_handle_touch(tgui_state_t *st, const tgui_event *ev) {
         tgui_handle_gap_touch(st, ev);
         return;
     }
+    for (int i = 0; i < 2; i++) {
+        if (id == st->grid_side[i]) {
+            tgui_handle_side_touch(st, i, ev);
+            return;
+        }
+    }
     for (int i = 0; i < 3; i++) {
         if (id == st->key[i]) {
             bool down = st->key_down[i];
@@ -938,7 +995,20 @@ static void tgui_handle_touch(tgui_state_t *st, const tgui_event *ev) {
                 st->enc_x[i] = p->x;
                 st->enc_y[i] = p->y;
                 st->enc_acc[i] = 0;
+                st->enc_sx[i] = p->x;
+                st->enc_sy[i] = p->y;
+                st->enc_tap[i] = true;
+                clock_gettime(CLOCK_MONOTONIC, &st->enc_t0[i]);
             } else if (action == TGUI_TOUCH_UP || action == TGUI_TOUCH_CANCEL) {
+                // a tap on an encoder zone shows the grid
+                if (action == TGUI_TOUCH_UP && st->enc_ptr[i] != -1 && st->enc_tap[i] && tgui_has_grid(st)) {
+                    struct timespec now;
+                    clock_gettime(CLOCK_MONOTONIC, &now);
+                    long ms = (now.tv_sec - st->enc_t0[i].tv_sec) * 1000 + (now.tv_nsec - st->enc_t0[i].tv_nsec) / 1000000;
+                    if (ms < TGUI_TAP_MS) {
+                        st->want_page = TGUI_PAGE_GRID;
+                    }
+                }
                 st->enc_ptr[i] = -1;
             } else if (action == TGUI_TOUCH_MOVE && st->enc_ptr[i] != -1) {
                 for (uint32_t e = 0; e < ev->touch.events; e++) {
@@ -951,10 +1021,15 @@ static void tgui_handle_touch(tgui_state_t *st, const tgui_event *ev) {
                         st->enc_acc[i] += (float)((p->x - st->enc_x[i]) - (p->y - st->enc_y[i]));
                         st->enc_x[i] = p->x;
                         st->enc_y[i] = p->y;
+                        if (abs(p->x - st->enc_sx[i]) > TGUI_TAP_DP * st->density ||
+                            abs(p->y - st->enc_sy[i]) > TGUI_TAP_DP * st->density) {
+                            st->enc_tap[i] = false;
+                        }
                     }
                 }
                 int steps = (int)(st->enc_acc[i] / st->enc_step_px);
                 if (steps != 0) {
+                    st->enc_tap[i] = false;
                     st->enc_acc[i] -= steps * st->enc_step_px;
                     steps = steps > 127 ? 127 : (steps < -127 ? -127 : steps);
                     tgui_post_enc(i + 1, steps);

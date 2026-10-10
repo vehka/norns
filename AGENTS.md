@@ -325,10 +325,27 @@ crone still connects to `system:playback_*` as on any norns.
   backend), so scripts use it through `grid.connect()` unchanged. Rotation,
   intensity and tilt are ignored. A finger holds the cell it lands on until
   it lifts; sliding does not retrigger.
-- A two-finger sideways swipe (80 dp, either direction) switches pages: on
-  the grid anywhere, on the screen page in the middle part between the
-  zones. Back returns from the grid to the screen page. The two fingers of
-  a swipe on the grid press their two cells until the swipe is recognised.
+- Switching pages: on the screen page, a sideways swipe (80 dp, either
+  direction, any number of fingers) in the middle part between the zones
+  shows the grid, and so does a tap on an encoder zone (under 300 ms,
+  within 8 dp, no encoder step sent). On the grid page, a tap on the strip
+  left or right of the grid (dark grey, out to the window edges, at least
+  32 dp wide; the grid shrinks to leave them) goes back, and so does back.
+  The strips are weighted children of a row, not sized from the
+  configuration: the full screen window is wider than `screen_width` says. The tap counts on release, and not when it
+  started with a finger on the grid. The grid itself takes no gestures:
+  every touch on it is a key press.
+- **Next: a virtual arc**, as a third landscape page. Nothing is written.
+  Where it would hook in: `dev_monome_new_virtual_grid()` is the model for
+  a virtual device (type `DEVICE_MONOME_TYPE_ARC`; led data for
+  `virtual_refresh` comes through `dev_monome_arc_set_led()`), and input
+  is `EVENT_ARC_ENCODER_DELTA` / `EVENT_ARC_ENCODER_KEY`, posted the way
+  `tgui_post_grid_key()` posts keys. In `tgui.cc` the pages are
+  `TGUI_PAGE_*`, `page_view[]`, `want_page` and `tgui_turn_page()`, all
+  written for exactly two pages; the encoder-zone tap and the side strips
+  each go to one fixed page and need a rule for three. Keep the lesson of
+  the grid: a surface that sends input on touch down cannot also take
+  gestures, so page changes belong on areas that do nothing else.
 - The grid shows up as `tgui grid tgui` in SYSTEM > DEVICES > GRID. It is
   not put on a port by itself (the add event comes before `system.state` is
   read, which then names the ports); here port 1 was set once with
@@ -341,9 +358,10 @@ crone still connects to `system:playback_*` as on any norns.
 - **Touch coordinates on an image view with a buffer are in buffer
   pixels** (0..1023 x 0..511 here), whatever size the view is drawn at; on
   other views they are view pixels. Found by tapping the corner pads.
-- Grid state: tried by hand with `awake`. Page swipes work in both
-  directions, taps map to the right cells (corner pad = 16,8) and the
-  script reacts, chords included. Holds have not been looked at. The
+- Grid state: tried by hand with `awake`. Taps map to the right cells
+  (corner pad = 16,8) and the script reacts, chords included. Page switching
+  (swipe, encoder-zone tap, side strips out to the edges) has been used by
+  hand too. Holds have not been looked at. The
   picture is sized from the window height reported with the system bars
   showing (354 dp on the S23+), so it may sit a little short of the bottom
   edge. `grid = false` in the options turns it off.
