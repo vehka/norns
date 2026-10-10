@@ -1,4 +1,5 @@
-// jack-aaudio: play a JACK server's output through Android's AAudio.
+// jack-aaudio: play a JACK server's output through Android's AAudio, and
+// give it the microphone as capture ports.
 //
 // termux's own jack driver (opensles) keeps only two buffers queued and has
 // no slack for a late cycle, which crackles. Instead jackd runs on the
@@ -6,7 +7,8 @@
 // callback stream, with a ring buffer in between to absorb late cycles: an
 // android app gets no real-time scheduling, except for that callback.
 //
-//   jack-aaudio [buffer_ms [stats_seconds [device|timer]]]   (default 20, 0, timer)
+//   jack-aaudio [buffer_ms [stats_seconds [device|timer [input]]]]
+//   (default 20, 0, timer, 0)
 //
 // buffer_ms is how late a jack cycle may be before the output runs dry.
 // with stats_seconds, the fill range of the ring is logged that often.
@@ -23,7 +25,18 @@
 // ratio follows the fill level, the two clocks not being the same. the
 // timer driver drops the time it is late by, so this needs a larger buffer.
 //
-// cc -O2 -o jack-aaudio jack-aaudio.c -ljack -laaudio
+// input (1 or 0, device clock only): an AAudio input stream fills a second
+// ring, which a second jack client, aaudio_in, hands out on its physical
+// capture_* ports. it is a client of its own so that jack runs it before
+// whatever reads the ports, and the playback side after: one client with
+// both would sit in a loop, which costs a period. jack never runs ahead of
+// the output device, so the ring only has to cover the input's own bursts,
+// not buffer_ms; a late cycle finds more in it and reads it off when jack
+// catches up. the two devices need not share a clock (a usb microphone and
+// the speaker do not), so the ring is read through a resampler that holds
+// its lowest fill level steady.
+//
+// cc -O2 -o jack-aaudio jack-aaudio.c -ljack -laaudio   (android api 29+)
 
 #include <aaudio/AAudio.h>
 #include <jack/jack.h>
@@ -59,6 +72,22 @@ static atomic_bool freewheeling;
 static unsigned hold_frames;
 static sem_t room; // posted by the aaudio thread after it has read
 
+// capture: written by the aaudio input thread, read by capture_process()
+static float cap_ring[RING_FRAMES * CHANNELS];
+static atomic_uint cap_w;
+static atomic_uint cap_r;
+static jack_client_t *cap_client;
+static jack_port_t *cap_port[CHANNELS];
+static atomic_uint cap_margin; // frames to have left in the ring after a read
+static unsigned cap_slack;     // frames above that before audio is dropped
+static atomic_uint cap_underruns;
+static atomic_uint cap_overruns;
+static atomic_int cap_stat_min = INT32_MAX; // least left after a read since the last report
+static atomic_int cap_stat_ppm;
+static _Atomic float cap_peak;
+static atomic_bool cap_heard; // some sample was not zero
+static atomic_bool cap_error;
+
 // only touched by the aaudio thread
 static double phase;   // read position past ring_r, 0..1 frame
 static double fill_avg; // smoothed fill level
@@ -73,6 +102,18 @@ static atomic_uint underruns;
 static atomic_uint overruns;
 static atomic_bool stream_error;
 static atomic_bool quit;
+
+// 4-point hermite between frames n and n + 1 of a ring
+static inline float hermite(const float *buf, unsigned n, int c, float t) {
+    float y0 = buf[((n - 1) & (RING_FRAMES - 1)) * CHANNELS + c];
+    float y1 = buf[(n & (RING_FRAMES - 1)) * CHANNELS + c];
+    float y2 = buf[((n + 1) & (RING_FRAMES - 1)) * CHANNELS + c];
+    float y3 = buf[((n + 2) & (RING_FRAMES - 1)) * CHANNELS + c];
+    float c1 = 0.5f * (y2 - y0);
+    float c2 = y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3;
+    float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+    return ((c3 * t + c2) * t + c1) * t + y1;
+}
 
 static int jack_process(jack_nframes_t nframes, void *arg) {
     (void)arg;
@@ -110,6 +151,93 @@ static int jack_process(jack_nframes_t nframes, void *arg) {
     return 0;
 }
 
+static int capture_process(jack_nframes_t nframes, void *arg) {
+    (void)arg;
+    static bool waiting = true; // for the ring to fill
+    static double pos0;         // read position past cap_r, 0..1 frame
+    static double ratio = 1.0;
+    static int win_min = INT32_MAX; // least left after a read in this window
+    static unsigned win_frames;
+    float *out[CHANNELS];
+    for (int c = 0; c < CHANNELS; c++) {
+        out[c] = (float *)jack_port_get_buffer(cap_port[c], nframes);
+    }
+    int margin = (int)atomic_load_explicit(&cap_margin, memory_order_relaxed);
+    unsigned r = atomic_load_explicit(&cap_r, memory_order_relaxed);
+    unsigned w = atomic_load_explicit(&cap_w, memory_order_acquire);
+    unsigned fill = w - r;
+    // where in the input's bursts this lands is not known, hence the quarter
+    unsigned start = nframes + margin + margin / 4;
+
+    if (!waiting && fill > start + cap_slack) {
+        // far behind, e.g. after the output ran dry: skip to the newest
+        atomic_fetch_add(&cap_overruns, 1);
+        waiting = true;
+    }
+    if (waiting) {
+        if (fill < start) {
+            for (int c = 0; c < CHANNELS; c++) {
+                memset(out[c], 0, sizeof(float) * nframes);
+            }
+            return 0;
+        }
+        r = w - start;
+        fill = start;
+        pos0 = 0;
+        ratio = 1.0;
+        win_min = INT32_MAX;
+        win_frames = 0;
+        waiting = false;
+    }
+    // the interpolation reads one frame behind and two ahead
+    if (fill < (unsigned)(pos0 + nframes * ratio) + 3) {
+        for (int c = 0; c < CHANNELS; c++) {
+            memset(out[c], 0, sizeof(float) * nframes);
+        }
+        atomic_fetch_add(&cap_underruns, 1);
+        waiting = true;
+        return 0;
+    }
+    double pos = pos0;
+    for (jack_nframes_t i = 0; i < nframes; i++) {
+        unsigned n = r + (unsigned)pos;
+        float t = (float)(pos - (unsigned)pos);
+        for (int c = 0; c < CHANNELS; c++) {
+            out[c][i] = hermite(cap_ring, n, c, t);
+        }
+        pos += ratio;
+    }
+    unsigned used = (unsigned)pos;
+    pos0 = pos - used;
+    atomic_store_explicit(&cap_r, r + used, memory_order_release);
+
+    // a late cycle only ever finds more in the ring, so the least that was
+    // left over half a second is what tells the two clocks apart. within a
+    // quarter of the margin nothing is done: on one clock the ratio is 1
+    int left = (int)(fill - used);
+    if (left < win_min) {
+        win_min = left;
+    }
+    win_frames += nframes;
+    if (win_frames >= (unsigned)rate / 2) {
+        int err = win_min - margin, band = margin / 4;
+        err = err > band ? err - band : (err < -band ? err + band : 0);
+        ratio = 1.0 + 0.25 * err / rate;
+        if (ratio > 1.01) {
+            ratio = 1.01;
+        } else if (ratio < 0.99) {
+            ratio = 0.99;
+        }
+        if (win_min < atomic_load_explicit(&cap_stat_min, memory_order_relaxed)) {
+            atomic_store_explicit(&cap_stat_min, win_min, memory_order_relaxed);
+        }
+        atomic_store_explicit(&cap_stat_ppm, (int)((ratio - 1.0) * 1e6), memory_order_relaxed);
+        win_min = INT32_MAX;
+        win_frames = 0;
+    }
+    return 0;
+}
+
 static void on_freewheel(int starting, void *arg) {
     (void)arg;
     atomic_store(&freewheeling, starting != 0);
@@ -126,6 +254,40 @@ static void note_fill(int before, int after) {
 
 static inline float ring_at(unsigned frame, int c) {
     return ring[(frame & (RING_FRAMES - 1)) * CHANNELS + c];
+}
+
+static aaudio_data_callback_result_t capture_callback(AAudioStream *stream, void *user, void *data,
+                                                      int32_t nframes) {
+    (void)stream;
+    (void)user;
+    const float *in = (const float *)data;
+    unsigned w = atomic_load_explicit(&cap_w, memory_order_relaxed);
+    unsigned r = atomic_load_explicit(&cap_r, memory_order_acquire);
+    if (w - r + nframes > RING_FRAMES) {
+        return AAUDIO_CALLBACK_RESULT_CONTINUE; // jack is not reading
+    }
+    float peak = 0;
+    for (int32_t i = 0; i < nframes; i++) {
+        float *dst = &cap_ring[((w + i) & (RING_FRAMES - 1)) * CHANNELS];
+        for (int c = 0; c < CHANNELS; c++) {
+            float v = in[i * CHANNELS + c];
+            dst[c] = v;
+            if (v < 0) {
+                v = -v;
+            }
+            if (v > peak) {
+                peak = v;
+            }
+        }
+    }
+    atomic_store_explicit(&cap_w, w + nframes, memory_order_release);
+    if (peak > atomic_load_explicit(&cap_peak, memory_order_relaxed)) {
+        atomic_store_explicit(&cap_peak, peak, memory_order_relaxed);
+    }
+    if (peak > 0) {
+        atomic_store_explicit(&cap_heard, true, memory_order_relaxed);
+    }
+    return AAUDIO_CALLBACK_RESULT_CONTINUE;
 }
 
 static aaudio_data_callback_result_t audio_callback(AAudioStream *stream, void *user, void *data,
@@ -206,13 +368,7 @@ static aaudio_data_callback_result_t audio_callback(AAudioStream *stream, void *
         unsigned n = r + (unsigned)pos;
         float t = (float)(pos - (unsigned)pos);
         for (int c = 0; c < CHANNELS; c++) {
-            // 4-point hermite
-            float y0 = ring_at(n - 1, c), y1 = ring_at(n, c);
-            float y2 = ring_at(n + 1, c), y3 = ring_at(n + 2, c);
-            float c1 = 0.5f * (y2 - y0);
-            float c2 = y0 - 2.5f * y1 + 2.f * y2 - 0.5f * y3;
-            float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
-            float v = ((c3 * t + c2) * t + c1) * t + y1;
+            float v = hermite(ring, n, c, t);
             out[i * CHANNELS + c] = v > 1.f ? 1.f : (v < -1.f ? -1.f : v);
         }
         pos += ratio;
@@ -230,9 +386,46 @@ static aaudio_data_callback_result_t audio_callback(AAudioStream *stream, void *
 // e.g. headphones plugged in: the stream is dead and has to be reopened
 static void error_callback(AAudioStream *stream, void *user, aaudio_result_t error) {
     (void)stream;
-    (void)user;
     (void)error;
-    atomic_store(&stream_error, true);
+    atomic_store(user ? &cap_error : &stream_error, true);
+}
+
+static AAudioStream *open_input(bool quiet) {
+    AAudioStreamBuilder *b;
+    AAudioStream *s = NULL;
+    if (AAudio_createStreamBuilder(&b) != AAUDIO_OK) {
+        return NULL;
+    }
+    AAudioStreamBuilder_setDirection(b, AAUDIO_DIRECTION_INPUT);
+    AAudioStreamBuilder_setSampleRate(b, rate);
+    AAudioStreamBuilder_setChannelCount(b, CHANNELS);
+    AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_FLOAT);
+    AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
+    // the low latency path, without the processing meant for calls
+    AAudioStreamBuilder_setInputPreset(b, AAUDIO_INPUT_PRESET_VOICE_PERFORMANCE);
+    AAudioStreamBuilder_setDataCallback(b, capture_callback, NULL);
+    AAudioStreamBuilder_setErrorCallback(b, error_callback, &cap_error);
+    aaudio_result_t res = AAudioStreamBuilder_openStream(b, &s);
+    AAudioStreamBuilder_delete(b);
+    if (res == AAUDIO_OK) {
+        atomic_store(&cap_error, false);
+        res = AAudioStream_requestStart(s);
+        if (res != AAUDIO_OK) {
+            AAudioStream_close(s);
+        }
+    }
+    if (res != AAUDIO_OK) {
+        if (!quiet) {
+            fprintf(stderr, "jack-aaudio: no input: %s (does Termux have the microphone permission?)\n",
+                    AAudio_convertResultToText(res));
+        }
+        return NULL;
+    }
+    int burst = AAudioStream_getFramesPerBurst(s);
+    atomic_store(&cap_margin, burst < 48 ? 96 : 2 * (unsigned)burst);
+    fprintf(stderr, "jack-aaudio: input open, rate %d, burst %d frames\n", AAudioStream_getSampleRate(s),
+            burst);
+    return s;
 }
 
 static AAudioStream *open_stream(void) {
@@ -286,6 +479,7 @@ int main(int argc, char **argv) {
     int buffer_ms = argc > 1 ? atoi(argv[1]) : 20;
     int stats_s = argc > 2 ? atoi(argv[2]) : 0;
     device_clock = argc > 3 && !strcmp(argv[3], "device");
+    bool input = device_clock && argc > 4 && atoi(argv[4]) > 0;
     if (buffer_ms < 2) {
         buffer_ms = 2;
     }
@@ -326,6 +520,26 @@ int main(int argc, char **argv) {
                                                      : JackPortIsInput,
                                         0);
     }
+    if (input) {
+        cap_client = jack_client_open("aaudio_in", JackNoStartServer, NULL);
+        if (!cap_client) {
+            fprintf(stderr, "jack-aaudio: cannot connect to jack\n");
+            return 1;
+        }
+        cap_slack = 2 * hold_frames + 2 * period;
+        atomic_store(&cap_margin, 192);
+        jack_set_process_callback(cap_client, capture_process, NULL);
+        for (int c = 0; c < CHANNELS; c++) {
+            char name[16];
+            snprintf(name, sizeof(name), "capture_%d", c + 1);
+            cap_port[c] = jack_port_register(cap_client, name, JACK_DEFAULT_AUDIO_TYPE,
+                                             JackPortIsOutput | JackPortIsPhysical | JackPortIsTerminal, 0);
+        }
+        if (jack_activate(cap_client)) {
+            fprintf(stderr, "jack-aaudio: cannot activate\n");
+            return 1;
+        }
+    }
     if (jack_activate(client)) {
         fprintf(stderr, "jack-aaudio: cannot activate\n");
         return 1;
@@ -350,8 +564,9 @@ int main(int argc, char **argv) {
     signal(SIGTERM, on_signal);
 
     AAudioStream *stream = open_stream();
-    unsigned last_under = 0, last_over = 0;
-    int last_xruns = 0, seconds = 0, ticks = 0;
+    AAudioStream *in_stream = input ? open_input(false) : NULL;
+    unsigned last_under = 0, last_over = 0, last_cap_under = 0, last_cap_over = 0;
+    int last_xruns = 0, seconds = 0, ticks = 0, in_seconds = 0;
     while (!atomic_load(&quit)) {
         usleep(100000);
         if (++ticks % 10) {
@@ -365,6 +580,25 @@ int main(int argc, char **argv) {
             stream = open_stream();
             last_xruns = 0;
             continue;
+        }
+        if (input && (!in_stream || atomic_load(&cap_error))) {
+            // e.g. a headset was plugged in or pulled out; or there was no
+            // permission at the start, which has been said once
+            if (in_stream) {
+                fprintf(stderr, "jack-aaudio: input lost, reopening\n");
+                AAudioStream_close(in_stream);
+            }
+            in_stream = open_input(true);
+            in_seconds = 0;
+        } else if (in_stream && ++in_seconds == 5 && !atomic_load(&cap_heard)) {
+            // android hands an app that may not record a stream of zeros
+            fprintf(stderr, "jack-aaudio: the input is silent (does Termux have the microphone permission?)\n");
+        }
+        unsigned cu = atomic_load(&cap_underruns), co = atomic_load(&cap_overruns);
+        if (cu != last_cap_under || co != last_cap_over) {
+            fprintf(stderr, "jack-aaudio: input underruns %u overruns %u\n", cu, co);
+            last_cap_under = cu;
+            last_cap_over = co;
         }
         unsigned u = atomic_load(&underruns), o = atomic_load(&overruns);
         if (u != last_under || o != last_over) {
@@ -383,6 +617,11 @@ int main(int argc, char **argv) {
             fprintf(stderr, "jack-aaudio: fill %d..%d mean %d frames, ratio %+d ppm\n",
                     atomic_exchange(&stat_min, INT32_MAX), atomic_exchange(&stat_max, 0),
                     atomic_load(&stat_avg), atomic_load(&stat_ppm));
+            if (in_stream) {
+                fprintf(stderr, "jack-aaudio: input least left %d of %u frames, ratio %+d ppm, peak %.4f\n",
+                        atomic_exchange(&cap_stat_min, INT32_MAX), atomic_load(&cap_margin),
+                        atomic_load(&cap_stat_ppm), (double)atomic_exchange(&cap_peak, 0));
+            }
         }
     }
 
@@ -392,6 +631,13 @@ int main(int argc, char **argv) {
     if (stream) {
         AAudioStream_requestStop(stream);
         AAudioStream_close(stream);
+    }
+    if (in_stream) {
+        AAudioStream_requestStop(in_stream);
+        AAudioStream_close(in_stream);
+    }
+    if (cap_client) {
+        jack_client_close(cap_client);
     }
     jack_client_close(client);
     return 0;

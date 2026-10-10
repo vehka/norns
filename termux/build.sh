@@ -53,8 +53,9 @@ fi
 clang -O1 -I"$PREFIX_DEPS/include" -o "$PREFIX_DEPS/bin/repl-send" \
     "$NORNS_DIR/termux/repl-send.c" "$PREFIX_DEPS/lib/libnng.a" -latomic
 
-# audio output: plays jack through AAudio, which also clocks it (android api 26+)
-clang -O2 -target "$(clang -dumpmachine | sed 's/[0-9]*$//')26" -o "$PREFIX_DEPS/bin/jack-aaudio" \
+# audio in and out: plays jack through AAudio, which also clocks it, and
+# records for its capture ports (android api 29+)
+clang -O2 -target "$(clang -dumpmachine | sed 's/[0-9]*$//')29" -o "$PREFIX_DEPS/bin/jack-aaudio" \
     "$NORNS_DIR/termux/jack-aaudio.c" -ljack -laaudio
 
 cd "$NORNS_DIR"

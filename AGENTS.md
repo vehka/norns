@@ -200,11 +200,21 @@ points here. Any thread that something will `pthread_cancel` (and especially
 
 ## Known limits
 
-- **No audio input.** There are no capture ports. (`jackd -d opensles`
-  came up playback-only, and `-C 2` made it fail to initialise; probably
-  Termux lacks the microphone permission, unconfirmed.) An AAudio input
-  stream in `jack-aaudio`, with physical `capture_*` ports, would be the
-  way in.
+- **No audio input.** The Termux app (0.118.3) does not declare
+  `RECORD_AUDIO` in its manifest, so there is no microphone permission to
+  grant and nothing running as Termux can record. (Termux:GUI does not
+  declare it either.) The code is there: `NORNS_AUDIO_INPUT=1
+  termux/start.sh` makes `jack-aaudio` open an AAudio input stream and
+  serve it on physical `aaudio_in:capture_*` ports, from a second JACK
+  client and through a resampler that follows the ring's lowest fill
+  level. It is off by default and untested: the stream opens (low latency
+  path, 96-frame bursts), then `requestStart` returns
+  `AAUDIO_ERROR_DISCONNECTED`, and `aaudio.log` says `no input`. No sample
+  has passed through the ring or the resampler. With a Termux that has the
+  permission it should only need the flag; before turning it on, mind that
+  the monitor level is saved at 0 dB and the phone's microphone hears its
+  speaker. The other way in is a small app of its own that records and
+  sends PCM to `jack-aaudio` over a local socket.
 - **Latency.** About 30 ms of buffering at 48 kHz (see Audio output), set
   by how long Android stalls threads that have no real-time priority.
 - **No hardware devices** (USB MIDI, HID, grid, crow) without root. The plan

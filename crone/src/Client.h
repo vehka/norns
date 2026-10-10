@@ -176,8 +176,8 @@ class Client {
                                             JackPortIsPhysical | JackPortIsOutput);
 
         if (ports == nullptr) {
-            // not fatal: a playback-only backend (e.g. jack's opensles driver
-            // without microphone permission) has no capture ports
+            // not fatal: a playback-only backend (e.g. termux's jack-aaudio
+            // run without input) has no capture ports
             std::cerr << "no ADC ports found; running without audio input" << std::endl;
             return;
         }
