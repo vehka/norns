@@ -88,6 +88,15 @@ SLEEP stops the whole stack and closes the window, and RESTART (also RESET
 and the end of UPDATE) restarts all of it, JACK included. Both verified by
 calling `norns.shutdown()` / `_norns.restart()` over the REPL.
 
+**The last script comes back after `stop.sh`.** Before killing matron,
+`stop.sh` has it set `norns.state.clean_shutdown` and save the state over
+the REPL, as SLEEP does; without the flag the next start ends in
+`NO SCRIPT`. With no script there is no engine either, and the
+SuperCollider polls (`amp_out_l` and the rest) are only registered after
+an engine load. A matron that does not answer keeps the flag false.
+Verified: `plonky` loaded, `stop.sh`, `start.sh`, and it resumed with all
+eight polls.
+
 Rebuild after editing sources:
 
 ```sh

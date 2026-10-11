@@ -7,6 +7,13 @@ stop() { # signal, pattern
     pkill "$1" -f "$2" 2>/dev/null
 }
 
+# matron is killed without running its shutdown, so have it mark the state
+# clean first, as SLEEP does: the next start then resumes the script. a
+# matron that does not answer leaves the flag alone and starts with no script
+. "$(dirname "$0")/env.sh"
+repl-send ws4://127.0.0.1:5555 \
+    'norns.state.clean_shutdown = true; norns.state.save()' 0.5 >/dev/null 2>&1
+
 for pat in 'build/ws-wrapper/ws-wrapper' 'build/norns/norns' '^sclang' '^scsynth'; do
     stop -TERM "$pat"
 done
