@@ -7,7 +7,7 @@
 // callback stream, with a ring buffer in between to absorb late cycles: an
 // android app gets no real-time scheduling, except for that callback.
 //
-//   jack-aaudio [buffer_ms [stats_seconds [device|timer [input]]]]
+//   jack-aaudio [buffer_ms [stats_seconds [device|timer [0|1|fast]]]]
 //   (default 20, 0, timer, 0)
 //
 // buffer_ms is how late a jack cycle may be before the output runs dry.
@@ -25,16 +25,21 @@
 // ratio follows the fill level, the two clocks not being the same. the
 // timer driver drops the time it is late by, so this needs a larger buffer.
 //
-// input (1 or 0, device clock only): an AAudio input stream fills a second
-// ring, which a second jack client, aaudio_in, hands out on its physical
-// capture_* ports. it is a client of its own so that jack runs it before
-// whatever reads the ports, and the playback side after: one client with
-// both would sit in a loop, which costs a period. jack never runs ahead of
-// the output device, so the ring only has to cover the input's own bursts,
-// not buffer_ms; a late cycle finds more in it and reads it off when jack
-// catches up. the two devices need not share a clock (a usb microphone and
-// the speaker do not), so the ring is read through a resampler that holds
-// its lowest fill level steady.
+// input (0, 1 or fast; device clock only): an AAudio input stream fills a
+// second ring, which a second jack client, aaudio_in, hands out on its
+// physical capture_* ports. it is a client of its own so that jack runs it
+// before whatever reads the ports, and the playback side after: one client
+// with both would sit in a loop, which costs a period. jack never runs
+// ahead of the output device, so the ring only has to cover the time the
+// input stays away, not buffer_ms; a late cycle finds more in it and reads
+// it off when jack catches up. the two devices need not share a clock (a
+// usb microphone and the speaker do not), so the ring is read through a
+// resampler that holds its lowest fill level steady.
+//
+// 1 is a normal stream: it comes 20 ms at a time, up to 45 ms apart, and
+// goes on whatever the screen does. fast is a low latency stream, 2 ms at
+// a time, but with the screen off android wakes it only every 100 ms or
+// more and a third of the audio is lost, with any input preset.
 //
 // cc -O2 -o jack-aaudio jack-aaudio.c -ljack -laaudio   (android api 29+)
 
@@ -74,10 +79,12 @@ static sem_t room; // posted by the aaudio thread after it has read
 
 // capture: written by the aaudio input thread, read by capture_process()
 static float cap_ring[RING_FRAMES * CHANNELS];
-static atomic_uint cap_w;
-static atomic_uint cap_r;
+static atomic_uint cap_w; // frames written; the writer never waits
+static bool cap_fast;     // low latency stream
 static jack_client_t *cap_client;
 static jack_port_t *cap_port[CHANNELS];
+static atomic_uint cap_gap;    // longest time between two input callbacks lately, in frames
+static atomic_int cap_gap_us;  // the same since the last report
 static atomic_uint cap_margin; // frames to have left in the ring after a read
 static unsigned cap_slack;     // frames above that before audio is dropped
 static atomic_uint cap_underruns;
@@ -151,23 +158,36 @@ static int jack_process(jack_nframes_t nframes, void *arg) {
     return 0;
 }
 
+static int capture_silence(float **out, jack_nframes_t nframes) {
+    for (int c = 0; c < CHANNELS; c++) {
+        memset(out[c], 0, sizeof(float) * nframes);
+    }
+    return 0;
+}
+
 static int capture_process(jack_nframes_t nframes, void *arg) {
     (void)arg;
+    static unsigned r;          // frames read
     static bool waiting = true; // for the ring to fill
-    static double pos0;         // read position past cap_r, 0..1 frame
+    static double pos0;         // read position past r, 0..1 frame
     static double ratio = 1.0;
-    static int win_min = INT32_MAX; // least left after a read in this window
+    static double level = -1; // mean fill level to hold, once known
+    static double win_sum;    // of the fill levels in this window
     static unsigned win_frames;
     float *out[CHANNELS];
     for (int c = 0; c < CHANNELS; c++) {
         out[c] = (float *)jack_port_get_buffer(cap_port[c], nframes);
     }
-    int margin = (int)atomic_load_explicit(&cap_margin, memory_order_relaxed);
-    unsigned r = atomic_load_explicit(&cap_r, memory_order_relaxed);
+    // a read may come just before the input does, which is `gap` after it
+    // last did: that much has to be in the ring when reading starts. what
+    // should be left then is 4 ms, and more when the gaps are long, those
+    // being less regular
+    unsigned gap = atomic_load_explicit(&cap_gap, memory_order_relaxed);
+    int margin = (int)((unsigned)rate / 250 + gap / 8);
+    atomic_store_explicit(&cap_margin, (unsigned)margin, memory_order_relaxed);
     unsigned w = atomic_load_explicit(&cap_w, memory_order_acquire);
     unsigned fill = w - r;
-    // where in the input's bursts this lands is not known, hence the quarter
-    unsigned start = nframes + margin + margin / 4;
+    unsigned start = nframes + margin + gap;
 
     if (!waiting && fill > start + cap_slack) {
         // far behind, e.g. after the output ran dry: skip to the newest
@@ -175,28 +195,23 @@ static int capture_process(jack_nframes_t nframes, void *arg) {
         waiting = true;
     }
     if (waiting) {
-        if (fill < start) {
-            for (int c = 0; c < CHANNELS; c++) {
-                memset(out[c], 0, sizeof(float) * nframes);
-            }
-            return 0;
+        if (!gap || fill < start) {
+            return capture_silence(out, nframes);
         }
         r = w - start;
         fill = start;
         pos0 = 0;
         ratio = 1.0;
-        win_min = INT32_MAX;
+        level = -1;
+        win_sum = 0;
         win_frames = 0;
         waiting = false;
     }
     // the interpolation reads one frame behind and two ahead
     if (fill < (unsigned)(pos0 + nframes * ratio) + 3) {
-        for (int c = 0; c < CHANNELS; c++) {
-            memset(out[c], 0, sizeof(float) * nframes);
-        }
         atomic_fetch_add(&cap_underruns, 1);
         waiting = true;
-        return 0;
+        return capture_silence(out, nframes);
     }
     double pos = pos0;
     for (jack_nframes_t i = 0; i < nframes; i++) {
@@ -209,30 +224,35 @@ static int capture_process(jack_nframes_t nframes, void *arg) {
     }
     unsigned used = (unsigned)pos;
     pos0 = pos - used;
-    atomic_store_explicit(&cap_r, r + used, memory_order_release);
+    r += used;
 
-    // a late cycle only ever finds more in the ring, so the least that was
-    // left over half a second is what tells the two clocks apart. within a
-    // quarter of the margin nothing is done: on one clock the ratio is 1
+    // the two clocks are told apart by the mean level over 4 s, held to
+    // what it was in the first 4 s after reading started. the least that
+    // is left after a read will not do for this: it is made by the longest
+    // gaps in the input, which do not come every time, and following it
+    // used up the ring after each lucky stretch. within a quarter of the
+    // margin nothing is done: on one clock the ratio is 1
     int left = (int)(fill - used);
-    if (left < win_min) {
-        win_min = left;
+    if (left < atomic_load_explicit(&cap_stat_min, memory_order_relaxed)) {
+        atomic_store_explicit(&cap_stat_min, left, memory_order_relaxed);
     }
+    win_sum += fill;
     win_frames += nframes;
-    if (win_frames >= (unsigned)rate / 2) {
-        int err = win_min - margin, band = margin / 4;
+    if (win_frames >= 4 * (unsigned)rate) {
+        double mean = win_sum * nframes / win_frames;
+        if (level < 0) {
+            level = mean;
+        }
+        double err = mean - level, band = margin / 4.0;
         err = err > band ? err - band : (err < -band ? err + band : 0);
-        ratio = 1.0 + 0.25 * err / rate;
+        ratio = 1.0 + 0.125 * err / rate;
         if (ratio > 1.01) {
             ratio = 1.01;
         } else if (ratio < 0.99) {
             ratio = 0.99;
         }
-        if (win_min < atomic_load_explicit(&cap_stat_min, memory_order_relaxed)) {
-            atomic_store_explicit(&cap_stat_min, win_min, memory_order_relaxed);
-        }
         atomic_store_explicit(&cap_stat_ppm, (int)((ratio - 1.0) * 1e6), memory_order_relaxed);
-        win_min = INT32_MAX;
+        win_sum = 0;
         win_frames = 0;
     }
     return 0;
@@ -261,11 +281,31 @@ static aaudio_data_callback_result_t capture_callback(AAudioStream *stream, void
     (void)stream;
     (void)user;
     const float *in = (const float *)data;
-    unsigned w = atomic_load_explicit(&cap_w, memory_order_relaxed);
-    unsigned r = atomic_load_explicit(&cap_r, memory_order_acquire);
-    if (w - r + nframes > RING_FRAMES) {
-        return AAUDIO_CALLBACK_RESULT_CONTINUE; // jack is not reading
+    // the longest time between two callbacks over the last 10 to 20 s, to
+    // the next ms and at most 250 ms
+    static struct timespec last, turned;
+    static unsigned gap_now, gap_before;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (last.tv_sec) {
+        int us = (int)((now.tv_sec - last.tv_sec) * 1000000 + (now.tv_nsec - last.tv_nsec) / 1000);
+        if (us > atomic_load_explicit(&cap_gap_us, memory_order_relaxed)) {
+            atomic_store_explicit(&cap_gap_us, us, memory_order_relaxed);
+        }
+        unsigned frames = us > 250000 ? (unsigned)rate / 4 : (unsigned)((long)us * rate / 1000000);
+        frames = (frames / 48 + 1) * 48;
+        if (frames > gap_now) {
+            gap_now = frames;
+        }
+        if (now.tv_sec - turned.tv_sec >= 10) {
+            gap_before = gap_now;
+            gap_now = 0;
+            turned = now;
+        }
+        atomic_store_explicit(&cap_gap, gap_now > gap_before ? gap_now : gap_before, memory_order_relaxed);
     }
+    last = now;
+    unsigned w = atomic_load_explicit(&cap_w, memory_order_relaxed);
     float peak = 0;
     for (int32_t i = 0; i < nframes; i++) {
         float *dst = &cap_ring[((w + i) & (RING_FRAMES - 1)) * CHANNELS];
@@ -400,8 +440,9 @@ static AAudioStream *open_input(bool quiet) {
     AAudioStreamBuilder_setSampleRate(b, rate);
     AAudioStreamBuilder_setChannelCount(b, CHANNELS);
     AAudioStreamBuilder_setFormat(b, AAUDIO_FORMAT_PCM_FLOAT);
-    AAudioStreamBuilder_setPerformanceMode(b, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
-    // the low latency path, without the processing meant for calls
+    AAudioStreamBuilder_setPerformanceMode(b, cap_fast ? AAUDIO_PERFORMANCE_MODE_LOW_LATENCY
+                                                       : AAUDIO_PERFORMANCE_MODE_NONE);
+    // without the processing meant for calls
     AAudioStreamBuilder_setInputPreset(b, AAUDIO_INPUT_PRESET_VOICE_PERFORMANCE);
     AAudioStreamBuilder_setDataCallback(b, capture_callback, NULL);
     AAudioStreamBuilder_setErrorCallback(b, error_callback, &cap_error);
@@ -422,9 +463,8 @@ static AAudioStream *open_input(bool quiet) {
         return NULL;
     }
     int burst = AAudioStream_getFramesPerBurst(s);
-    atomic_store(&cap_margin, burst < 48 ? 96 : 2 * (unsigned)burst);
-    fprintf(stderr, "jack-aaudio: input open, rate %d, burst %d frames\n", AAudioStream_getSampleRate(s),
-            burst);
+    fprintf(stderr, "jack-aaudio: input open, %s, rate %d, burst %d frames\n",
+            cap_fast ? "low latency" : "normal", AAudioStream_getSampleRate(s), burst);
     return s;
 }
 
@@ -479,7 +519,8 @@ int main(int argc, char **argv) {
     int buffer_ms = argc > 1 ? atoi(argv[1]) : 20;
     int stats_s = argc > 2 ? atoi(argv[2]) : 0;
     device_clock = argc > 3 && !strcmp(argv[3], "device");
-    bool input = device_clock && argc > 4 && atoi(argv[4]) > 0;
+    cap_fast = argc > 4 && !strcmp(argv[4], "fast");
+    bool input = device_clock && argc > 4 && (cap_fast || atoi(argv[4]) > 0);
     if (buffer_ms < 2) {
         buffer_ms = 2;
     }
@@ -527,7 +568,6 @@ int main(int argc, char **argv) {
             return 1;
         }
         cap_slack = 2 * hold_frames + 2 * period;
-        atomic_store(&cap_margin, 192);
         jack_set_process_callback(cap_client, capture_process, NULL);
         for (int c = 0; c < CHANNELS; c++) {
             char name[16];
@@ -596,7 +636,8 @@ int main(int argc, char **argv) {
         }
         unsigned cu = atomic_load(&cap_underruns), co = atomic_load(&cap_overruns);
         if (cu != last_cap_under || co != last_cap_over) {
-            fprintf(stderr, "jack-aaudio: input underruns %u overruns %u\n", cu, co);
+            fprintf(stderr, "jack-aaudio: input underruns %u overruns %u, margin %u frames\n", cu, co,
+                    atomic_load(&cap_margin));
             last_cap_under = cu;
             last_cap_over = co;
         }
@@ -618,9 +659,12 @@ int main(int argc, char **argv) {
                     atomic_exchange(&stat_min, INT32_MAX), atomic_exchange(&stat_max, 0),
                     atomic_load(&stat_avg), atomic_load(&stat_ppm));
             if (in_stream) {
-                fprintf(stderr, "jack-aaudio: input least left %d of %u frames, ratio %+d ppm, peak %.4f\n",
+                fprintf(stderr,
+                        "jack-aaudio: input least left %d of %u frames, ratio %+d ppm, peak %.4f, "
+                        "callbacks up to %.1f ms apart\n",
                         atomic_exchange(&cap_stat_min, INT32_MAX), atomic_load(&cap_margin),
-                        atomic_load(&cap_stat_ppm), (double)atomic_exchange(&cap_peak, 0));
+                        atomic_load(&cap_stat_ppm), (double)atomic_exchange(&cap_peak, 0),
+                        atomic_exchange(&cap_gap_us, 0) / 1000.0);
             }
         }
     }

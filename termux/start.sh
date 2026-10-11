@@ -28,8 +28,10 @@ wait_for() { # file, pattern, seconds
 # buffer covers the late ones; NORNS_AUDIO_CLOCK=timer runs jack on its own
 # timer instead. nice -20 is the most an app may ask for.
 # with the device clock jack-aaudio also brings the microphone in, as
-# aaudio_in:capture_* when NORNS_AUDIO_INPUT=1. off by default: termux has no
-# microphone permission to ask for, so android refuses to start the stream.
+# aaudio_in:capture_*. NORNS_AUDIO_INPUT=0 leaves it out; =fast takes the
+# low latency stream, which breaks up as soon as the screen is off. termux
+# has no microphone permission of its own: the Termux:API app has to be
+# installed and given it.
 # NORNS_JACK_DRIVER=opensles goes back to termux's driver. either way, a
 # client that dies uncleanly leaves the server unusable, which is why
 # stop.sh always takes jack down too
@@ -44,7 +46,7 @@ if [ "${NORNS_JACK_DRIVER:-dummy}" = dummy ]; then
         > "$NORNS_LOG/jack.log" 2>&1 &
     sleep 2
     nohup jack-aaudio "${NORNS_AUDIO_BUFFER_MS:-20}" "${NORNS_AUDIO_STATS_S:-0}" "$clock" \
-        "${NORNS_AUDIO_INPUT:-0}" \
+        "${NORNS_AUDIO_INPUT:-1}" \
         > "$NORNS_LOG/aaudio.log" 2>&1 &
     sleep 1
 else

@@ -31,7 +31,8 @@ Not done / not tested:
   SIGTERMs matron, which exits without running IO teardown).
 - **SDL screen** (`screen:sdl`): compiled in, never run; needs an X server
   (see below).
-- Audio input, softcut under load, MIDI, grid, crow, HID.
+- Softcut under load, MIDI, grid, crow, HID. Audio input reaches crone
+  (see Audio input); nothing has been recorded with it.
 - `termux/build.sh` was written after the steps were done by hand. It has
   only been syntax-checked, not run end to end.
 
@@ -52,7 +53,7 @@ Not done / not tested:
 | `~/src/norns-deps` | `vehka/norns-deps`, on its `termux` branch (see Scripts, mods and UGens) |
 | `~/src/noseda` | the `noseda` agent skill, linked into `~/.claude/skills` |
 | `$TMPDIR/norns-run/` | `jack.log`, `aaudio.log`, `sclang.log`, `norns.log`, `launch.log`, `restart.log` |
-| `~/.shortcuts/tasks/` | `norns`, `norns-stop` (Termux:Widget) |
+| `~/.shortcuts/tasks/` | `norns`, `norns-fast`, `norns-stop` (Termux:Widget) |
 
 ## Build and run
 
@@ -67,7 +68,12 @@ termux/install-widget.sh   # Termux:Widget shortcuts (build.sh runs it)
 
 **Home screen widget.** `install-widget.sh` writes two wrappers into
 `~/.shortcuts/tasks/` (real files; they run without a terminal): `norns`
-runs `launch.sh`, `norns-stop` runs `stop.sh`. They show up in the
+runs `launch.sh`, `norns-stop` runs `stop.sh`, and `norns-fast` runs
+`launch.sh` with `NORNS_AUDIO_INPUT=fast` (see Audio input). With that
+variable set, `launch.sh` restarts a norns that runs with another input
+instead of only showing its window; RESTART in the menu keeps the input
+it was started with. Run by hand on the S23+: `norns-fast` starts with the
+not tapped. They show up in the
 Termux:Widget widget (`com.termux.widget`) once it is added to the home
 screen or refreshed. A task has no output: `launch.sh` logs to
 `$TMPDIR/norns-run/launch.log`, and the window appears after about 30 s.
@@ -200,21 +206,13 @@ points here. Any thread that something will `pthread_cancel` (and especially
 
 ## Known limits
 
-- **No audio input.** The Termux app (0.118.3) does not declare
-  `RECORD_AUDIO` in its manifest, so there is no microphone permission to
-  grant and nothing running as Termux can record. (Termux:GUI does not
-  declare it either.) The code is there: `NORNS_AUDIO_INPUT=1
-  termux/start.sh` makes `jack-aaudio` open an AAudio input stream and
-  serve it on physical `aaudio_in:capture_*` ports, from a second JACK
-  client and through a resampler that follows the ring's lowest fill
-  level. It is off by default and untested: the stream opens (low latency
-  path, 96-frame bursts), then `requestStart` returns
-  `AAUDIO_ERROR_DISCONNECTED`, and `aaudio.log` says `no input`. No sample
-  has passed through the ring or the resampler. With a Termux that has the
-  permission it should only need the flag; before turning it on, mind that
-  the monitor level is saved at 0 dB and the phone's microphone hears its
-  speaker. The other way in is a small app of its own that records and
-  sends PCM to `jack-aaudio` over a local socket.
+- **Audio input needs the Termux:API app.** The Termux app (0.118.3)
+  does not declare `RECORD_AUDIO`, so by itself nothing running as Termux
+  can record: the stream opens and `requestStart` returns
+  `AAUDIO_ERROR_DISCONNECTED` (`no input` in `aaudio.log`). Termux:API
+  (`com.termux.api`, same F-Droid source) shares Termux's user id and does
+  declare it; once it is installed and has the microphone permission, the
+  permission holds for Termux's processes too. See Audio input.
 - **Latency.** About 30 ms of buffering at 48 kHz (see Audio output), set
   by how long Android stalls threads that have no real-time priority.
 - **No hardware devices** (USB MIDI, HID, grid, crow) without root. The plan
@@ -342,6 +340,52 @@ AAudio callback stream.
   change); not exercised.
 - `jack_frame_time()` is stuck at 0 here, hence the `CLOCK_MONOTONIC`
   change in `jack_client.cpp`.
+
+## Audio input
+
+`jack-aaudio` also opens an AAudio input stream (the phone's microphones,
+stereo, preset `VOICE_PERFORMANCE`) and serves it on physical
+`aaudio_in:capture_*` ports, which crone connects to by itself.
+`NORNS_AUDIO_INPUT=0 termux/start.sh` leaves it out.
+
+- It is a second JACK client, so that JACK runs it before crone and the
+  playback client after; one client with both directions would sit in a
+  loop in the graph.
+- **Normal stream by default; `NORNS_AUDIO_INPUT=fast` is the low latency
+  one.** The low latency stream comes 96 frames at a time, but as soon as
+  the screen is off Android wakes it only every 100 ms or more and about a
+  third of the audio is lost (32000 of 48000 frames a second). Measured
+  with five input presets side by side, all the same. The normal stream
+  comes 960 frames at a time, 20 to 45 ms apart, and kept its 48000 frames
+  a second through the same screen-off stretch. That was measured with a
+  probe outside JACK; the full stack has not been run with the screen off
+  on the normal stream.
+- Input latency is what has to be in the ring when reading starts: a
+  period, the longest gap between two input callbacks in the last 10-20 s,
+  and a margin of 4 ms plus an eighth of that gap. About 60 ms on the
+  normal stream, about 10 ms on the fast one, on top of the output's 30.
+- JACK never runs ahead of the output device, so the input ring does not
+  need `NORNS_AUDIO_BUFFER_MS`: a late cycle finds more in the ring and
+  reads it off while catching up.
+- The ring is read through a resampler, in case the two devices have
+  different clocks (not tried; on the phone's own microphone and speaker
+  the ratio stays at 1). It holds the mean fill level over 4 s to what it
+  was in the first 4 s. Two earlier versions followed the least that was
+  left after a read, over 0.5 s and over 4 s; on the normal stream both
+  underran every few seconds, because that minimum is made by the long
+  gaps, which do not come every time.
+- With `NORNS_AUDIO_STATS_S` the log has an input line as well: the least
+  left after a read, the margin, the ratio, the peak sample and the longest
+  gap between callbacks. `input underruns` lines mean the ring ran dry:
+  a burst of silence, then it refills. One or two at startup are usual.
+  `the input is silent` after 5 s means Android delivers zeros.
+- Verified on the S23+: both ports connected to `crone:input_1/2`,
+  `amp_in_l` / `amp_in_r` polls following the room, two minutes on the
+  normal stream without an underrun after startup. Stepping
+  `audio.level_monitor` up to 1.0 with the phone's own speaker did not
+  feed back at the volume the phone was at; nobody has listened to it.
+- Not done: softcut recording from the input, a headset or USB
+  microphone, the reopen after a device change.
 
 ## The screen: Termux:GUI
 
