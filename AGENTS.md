@@ -72,8 +72,10 @@ runs `launch.sh`, `norns-stop` runs `stop.sh`, and `norns-fast` runs
 `launch.sh` with `NORNS_AUDIO_INPUT=fast` (see Audio input). With that
 variable set, `launch.sh` restarts a norns that runs with another input
 instead of only showing its window; RESTART in the menu keeps the input
-it was started with. Run by hand on the S23+: `norns-fast` starts with the
-not tapped. They show up in the
+it was started with. The wrappers were run from a shell on the S23+, not
+tapped: `norns-fast` starts with the low latency input, either shortcut
+after it only shows the window, and asking for another input restarts.
+They show up in the
 Termux:Widget widget (`com.termux.widget`) once it is added to the home
 screen or refreshed. A task has no output: `launch.sh` logs to
 `$TMPDIR/norns-run/launch.log`, and the window appears after about 30 s.
