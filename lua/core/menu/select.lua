@@ -58,7 +58,10 @@ m.init = function()
     tabutil.save(m.favorites, paths.favorites)
   end
   -- weird command, but it is fast, recursive, skips hidden dirs, and sorts
-  norns.system_cmd('find ~/dust/code/ -mindepth 2 ' ..
+  -- on the desktop, follow symlinks so scripts linked in from a dev checkout show up
+  -- (platform 0/1: not a raspberry pi)
+  local follow = norns.platform < 2 and '-L ' or ''
+  norns.system_cmd('find ' .. follow .. '~/dust/code/ -mindepth 2 ' ..
                    '-name .git -prune -o -type f -name "*.lua" -printf "%P\n" | ' ..
                    'grep -Ev "/(lib|data|crow|test|docs)/" | ' ..
                    'sort',
