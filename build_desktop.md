@@ -297,3 +297,17 @@ build/ws-wrapper/ws-wrapper ws://0.0.0.0:5555 build/norns/norns
 
 On success, matron prints `norns.startup_status.ok` (a timeout instead means
 the handshake failed — see ports below).
+
+### One-command launcher: `scripts/norns-desktop`
+
+`scripts/norns-desktop` runs the sequence above in a single terminal: it
+starts JACK if needed, starts sclang under ws-wrapper (output goes to
+`$XDG_RUNTIME_DIR/norns-desktop.sclang.log`), waits until sclang owns UDP
+57120, then runs norns in the foreground. Quitting norns (or Ctrl-C) also
+stops sclang. If SYSTEM > RESTART leaves the restart flag
+(`$XDG_RUNTIME_DIR/norns-desktop.restart`), it starts both again. Pass
+`--no-ws` to run without ws-wrapper (no maiden). Put it on your PATH once:
+
+```sh
+ln -s "$(pwd)/scripts/norns-desktop" ~/.local/bin/norns-desktop
+```

@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# norns-desktop: start norns on a desktop Linux box.
+#
+# Runs the launch sequence from build_desktop.md §3:
+#   0. make sure JACK is running
+#   1. sclang under ws-wrapper (ws://0.0.0.0:5556), wait until it owns UDP 57120
+#   2. norns under ws-wrapper (ws://0.0.0.0:5555), in the foreground
+#
+# When norns exits, sclang is stopped too. If norns asked for a restart
+# (SYSTEM > RESTART writes $XDG_RUNTIME_DIR/norns-desktop.restart), both are
+# started again; otherwise the script exits.
+#
+# Usage: norns-desktop [--no-ws]
+#   --no-ws   run sclang and norns directly, without ws-wrapper (no maiden)
+#
+# Symlink it onto your PATH, e.g.:
+#   ln -s "$PWD/scripts/norns-desktop" ~/.local/bin/norns-desktop
+
+set -u
+
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+restart_flag="${XDG_RUNTIME_DIR:-/tmp}/norns-desktop.restart"
+sclang_log="${XDG_RUNTIME_DIR:-/tmp}/norns-desktop.sclang.log"
+sc_port=57120
+sc_timeout=30
+
+use_ws=1
+case "${1:-}" in
+  --no-ws) use_ws=0 ;;
+  "") ;;
+  -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "norns-desktop: unknown option: $1" >&2; exit 2 ;;
+esac
+
+log() { echo "norns-desktop: $*" >&2; }
+
+ws_wrapper="$repo/build/ws-wrapper/ws-wrapper"
+norns_bin="$repo/build/norns/norns"
+for bin in "$norns_bin" $([ "$use_ws" = 1 ] && echo "$ws_wrapper"); do
+  [ -x "$bin" ] || { log "missing $bin -- build first (python3 waf build --desktop)"; exit 1; }
+done
+command -v sclang >/dev/null || { log "sclang not found on PATH"; exit 1; }
+
+sc_port_open() { [ -n "$(ss -Hlun "sport = :$sc_port" 2>/dev/null)" ]; }
+
+sclang_pid=""
+stop_sclang() {
+  [ -n "$sclang_pid" ] || return 0
+  # sclang runs in its own session, so this also takes down scsynth
+  kill -TERM -- "-$sclang_pid" 2>/dev/null
+  for _ in $(seq 20); do
+    kill -0 -- "-$sclang_pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  kill -KILL -- "-$sclang_pid" 2>/dev/null
+  wait "$sclang_pid" 2>/dev/null
+  sclang_pid=""
+}
+trap 'stop_sclang; rm -f "$restart_flag"; exit 130' INT TERM
+trap 'stop_sclang' EXIT
+
+# 0. JACK
+if ! jack_lsp >/dev/null 2>&1; then
+  log "starting JACK"
+  jack_control start >/dev/null 2>&1
+  for _ in $(seq 20); do jack_lsp >/dev/null 2>&1 && break; sleep 0.25; done
+  jack_lsp >/dev/null 2>&1 || { log "JACK is not running and jack_control start failed"; exit 1; }
+fi
+
+if sc_port_open; then
+  log "UDP $sc_port is already in use -- is another sclang running? (pkill sclang)"
+  exit 1
+fi
+
+cd "$HOME" || exit 1
+
+while :; do
+  rm -f "$restart_flag"
+
+  # 1. sclang, in its own session so it can be stopped with scsynth as a group
+  log "starting sclang (log: $sclang_log)"
+  if [ "$use_ws" = 1 ]; then
+    setsid "$ws_wrapper" ws://0.0.0.0:5556 sclang </dev/null >"$sclang_log" 2>&1 &
+  else
+    setsid sclang </dev/null >"$sclang_log" 2>&1 &
+  fi
+  sclang_pid=$!
+
+  waited=0
+  until sc_port_open; do
+    if ! kill -0 "$sclang_pid" 2>/dev/null; then
+      log "sclang exited during startup; see $sclang_log"; exit 1
+    fi
+    if [ "$waited" -ge $((sc_timeout * 4)) ]; then
+      log "sclang did not open UDP $sc_port within ${sc_timeout}s; see $sclang_log"; exit 1
+    fi
+    sleep 0.25; waited=$((waited + 1))
+  done
+
+  # 2. norns, in the foreground
+  log "starting norns"
+  if [ "$use_ws" = 1 ]; then
+    "$ws_wrapper" ws://0.0.0.0:5555 "$norns_bin"
+  else
+    "$norns_bin"
+  fi
+  status=$?
+
+  stop_sclang
+
+  if [ -e "$restart_flag" ]; then
+    log "restart requested"
+    continue
+  fi
+  exit "$status"
+done
