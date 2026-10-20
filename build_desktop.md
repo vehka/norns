@@ -214,6 +214,35 @@ Keyboard input is built into the `screen:sdl` backend (hold Alt for the
 encoder/key control grid; other keys type) and is configurable via an
 `input = {...}` subtable — see `matronrc.lua.desktop`.
 
+### Virtual grid and arc
+
+`screen:sdl` also opens a **virtual grid** window (16x8 by default) and,
+when asked, a **virtual arc** window. Scripts see them as ordinary monome
+devices (`grid.connect()`, `arc.connect()`):
+
+```lua
+_boot.add_io('screen:sdl', {
+  grid = { cols = 16, rows = 8, size = 40 }, -- or true / false; any size up to 16x16
+  arc  = { rings = 4, size = 160, wheel = 16 }, -- or true / false (default false)
+})
+```
+
+- **Grid:** click to press a key while the button is down; drag to slide
+  across keys. **Alt+click** keeps a key pressed after the button comes up:
+  click more keys to build a chord, Alt+click a held key to let only that one
+  go, release Alt to let them all go. Held keys show a blue outline.
+- **Arc:** drag around a ring to turn it (1024 ticks per turn), or use the
+  mouse wheel over it (`wheel` ticks per step). The disc in the middle is the
+  ring's key, held the same way as a grid key.
+- The hold modifier is the same as the norns controls (`input.modifier`), so
+  Alt+1/2/3 and the encoder keys keep working while the grid window is
+  focused. If your window manager moves windows on Alt+drag (Xfce, Plasma 5,
+  some tiling WMs), Alt+click never reaches the window: set
+  `input.modifier = 'ctrl'`.
+- On first boot, assign the devices once in SYSTEM > DEVICES > GRID / ARC
+  (`virtual grid sdl`, `monome arc sdl`), as with a hardware grid; the choice
+  is saved. Closing a window hides it until the next start.
+
 For a **truly headless** run (no window), use an empty `~/matronrc.lua` — no
 screen/input IO is registered and `screen.*` calls are harmless. (Control via
 MIDI / OSC / Maiden REPL.)

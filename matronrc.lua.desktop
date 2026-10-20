@@ -15,6 +15,9 @@
 -- the values shown are the defaults).
 
 _boot.add_io('screen:sdl', {
+  -- virtual monome devices, each in a window of its own (see build_desktop.md):
+  -- grid = { cols = 16, rows = 8, size = 40 },  -- on by default; false for none
+  -- arc = { rings = 4, size = 160, wheel = 16 }, -- off by default; true for one
   -- input = {
   --   modifier = 'alt',      -- norns control activator: 'alt'|'ctrl'|'gui'|'shift'|'none'
   --   enc_step = 1,          -- steps per encoder tap
