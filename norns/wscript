@@ -45,6 +45,7 @@ def build(bld):
     if bld.env.NORNS_DESKTOP:
         matron_sources += [
             '../matron/src/hardware/screen/sdl.cc',
+            '../matron/src/hardware/screen/sdl_monome.cc',
             '../matron/src/hardware/input/sdl.cc',
         ]
 

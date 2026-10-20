@@ -15,6 +15,7 @@
 #include "events.h"
 #include "hardware/io.h"
 #include "hardware/screen/screens.h"
+#include "hardware/screen/sdl_monome.h"
 
 typedef struct _screen_sdl_priv {
     SDL_Window *window;
@@ -32,6 +33,9 @@ typedef struct _screen_sdl_priv {
     SDL_Scancode key_sc[3];  // K1..K3
     SDL_Scancode enc_dn[3];  // E1..E3 decrement
     SDL_Scancode enc_up[3];  // E1..E3 increment
+
+    // the virtual grid and arc windows (sdl_monome.cc)
+    sdl_monome_conf_t monome;
 } screen_sdl_priv_t;
 
 // guards access to draw_surface, shared between the screen-events thread
@@ -114,10 +118,12 @@ static SDL_Scancode screen_sdl_scancode_from_name(const char *name, SDL_Scancode
 int screen_sdl_config(matron_io_t *io, lua_State *l) {
     screen_sdl_priv_t *priv = (screen_sdl_priv_t *)io->data;
     screen_sdl_input_defaults(priv);
+    sdl_monome_conf_defaults(&priv->monome);
 
     if (!lua_istable(l, 2)) {
         return 0;
     }
+    sdl_monome_config(&priv->monome, l, 2);
     lua_getfield(l, 2, "input");
     if (!lua_istable(l, -1)) {
         lua_pop(l, 1);
@@ -205,6 +211,9 @@ int screen_sdl_setup(matron_io_t *io) {
         return -1;
     }
     fb->cairo = cairo_create(fb->surface);
+
+    // the devices before the thread, which opens their windows
+    sdl_monome_init(&priv->monome);
 
     priv->render_running = true;
     if (pthread_create(&priv->render_thread, NULL, &screen_sdl_render_loop, priv) != 0) {
@@ -448,6 +457,8 @@ static void *screen_sdl_render_loop(void *data) {
         priv->render_running = false;
         return NULL;
     }
+    // the grid and arc windows, with clicks held by the norns control modifier
+    sdl_monome_open(priv->grid_mod, priv->window);
 
     // Continuously pump SDL events and present the latest frame. Pumping keeps
     // the window mapped/composited; presenting every frame keeps the last drawn
@@ -463,6 +474,11 @@ static void *screen_sdl_render_loop(void *data) {
         // focus by SDL automatically.
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
+            if (sdl_monome_handle_event(&e)) {
+                continue;
+            }
+            // keys work the same in every window, so norns keys and
+            // encoders can be used while the grid has the focus
             if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
                 screen_sdl_handle_key(priv, &e.key);
             }
@@ -471,9 +487,11 @@ static void *screen_sdl_render_loop(void *data) {
         SDL_BlitScaled(priv->draw_surface, NULL, priv->window_surface, NULL);
         SDL_UpdateWindowSurface(priv->window);
         pthread_mutex_unlock(&sdl_lock);
+        sdl_monome_present();
         clock_nanosleep(CLOCK_MONOTONIC, 0, &ts, NULL);
     }
 
+    sdl_monome_close();
     SDL_DestroyWindow(priv->window);
     priv->window = NULL;
     priv->window_surface = NULL;

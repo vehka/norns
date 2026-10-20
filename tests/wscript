@@ -703,10 +703,10 @@ def test(bld: BuildContext):
     # common libs many tests require
     link_libs = ["pthread"]
 
-    # desktop only: units that #include matron/src/hardware/screen/sdl.cc
+    # desktop only: units that #include matron/src/hardware/screen/sdl*.cc
     # (the SDL window backend) need its SDL2/cairo/lua dependencies. keyed by
     # test dir; built only under --desktop, where these uselibs are configured.
-    DESKTOP_TEST_DIRS = {"matron/screen_sdl"}
+    DESKTOP_TEST_DIRS = {"matron/screen_sdl", "matron/screen_sdl_monome"}
     DESKTOP_TEST_USELIBS = ["SDL2", "CAIRO", "CAIRO-FT", "LUA53"]
 
     # collect test units
