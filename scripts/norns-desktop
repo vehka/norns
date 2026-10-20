@@ -43,21 +43,29 @@ command -v sclang >/dev/null || { log "sclang not found on PATH"; exit 1; }
 
 sc_port_open() { [ -n "$(ss -Hlun "sport = :$sc_port" 2>/dev/null)" ]; }
 
-sclang_pid=""
-stop_sclang() {
-  [ -n "$sclang_pid" ] || return 0
-  # sclang runs in its own session, so this also takes down scsynth
-  kill -TERM -- "-$sclang_pid" 2>/dev/null
+# sclang and norns each run in their own session (setsid), so a whole
+# process group can be stopped at once: sclang with its scsynth, and
+# ws-wrapper with its norns. Ctrl-C then only reaches this script, which
+# stops them itself -- norns catches SIGINT to interrupt Lua and would
+# otherwise keep running and holding its OSC ports.
+stop_group() {  # stop_group <pid>
+  kill -TERM -- "-$1" 2>/dev/null
   for _ in $(seq 20); do
-    kill -0 -- "-$sclang_pid" 2>/dev/null || break
+    kill -0 -- "-$1" 2>/dev/null || break
     sleep 0.25
   done
-  kill -KILL -- "-$sclang_pid" 2>/dev/null
-  wait "$sclang_pid" 2>/dev/null
-  sclang_pid=""
+  kill -KILL -- "-$1" 2>/dev/null
+  wait "$1" 2>/dev/null
 }
-trap 'stop_sclang; rm -f "$restart_flag"; exit 130' INT TERM
-trap 'stop_sclang' EXIT
+sclang_pid=""
+norns_pid=""
+stop_all() {
+  [ -n "$norns_pid" ] && stop_group "$norns_pid"
+  [ -n "$sclang_pid" ] && stop_group "$sclang_pid"
+  norns_pid=""; sclang_pid=""
+}
+trap 'stop_all; rm -f "$restart_flag"; exit 130' INT TERM
+trap 'stop_all' EXIT
 
 # 0. JACK
 if ! jack_lsp >/dev/null 2>&1; then
@@ -76,8 +84,13 @@ if sc_port_open; then
   log "UDP $sc_port is already in use -- is another sclang running? (pkill sclang)"
   exit 1
 fi
+if [ -n "$(ss -Hlun 'sport = :10111' 2>/dev/null)" ]; then
+  log "UDP 10111 is already in use -- is another norns running? (pkill -f build/norns/norns)"
+  exit 1
+fi
 
 cd "$HOME" || exit 1
+exec 3<&0
 
 while :; do
   rm -f "$restart_flag"
@@ -87,7 +100,11 @@ while :; do
   if [ "$use_ws" = 1 ]; then
     setsid "$ws_wrapper" ws://0.0.0.0:5556 sclang </dev/null >"$sclang_log" 2>&1 &
   else
-    setsid sclang </dev/null >"$sclang_log" 2>&1 &
+    # sclang quits if stdin is /dev/null; give it a pipe that never closes
+    # (a fifo opened read-write)
+    sc_in="$(mktemp -u "${XDG_RUNTIME_DIR:-/tmp}/norns-desktop.sclang-in.XXXXXX")"
+    mkfifo "$sc_in" && exec 4<>"$sc_in" && rm -f "$sc_in"
+    setsid sclang <&4 >"$sclang_log" 2>&1 &
   fi
   sclang_pid=$!
 
@@ -102,16 +119,19 @@ while :; do
     sleep 0.25; waited=$((waited + 1))
   done
 
-  # 2. norns, in the foreground
+  # 2. norns, in its own session; keep the terminal as stdin for the
+  # --no-ws REPL
   log "starting norns"
   if [ "$use_ws" = 1 ]; then
-    "$ws_wrapper" ws://0.0.0.0:5555 "$norns_bin"
+    setsid "$ws_wrapper" ws://0.0.0.0:5555 "$norns_bin" <&3 &
   else
-    "$norns_bin"
+    setsid "$norns_bin" <&3 &
   fi
+  norns_pid=$!
+  wait "$norns_pid"
   status=$?
 
-  stop_sclang
+  stop_all
 
   if [ -e "$restart_flag" ]; then
     log "restart requested"
