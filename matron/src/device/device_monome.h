@@ -24,6 +24,8 @@ struct dev_monome {
     int quads;
     int quad_xoff[4];
     int quad_yoff[4];
+    // virtual device (m is NULL): called by dev_monome_refresh()
+    void (*virtual_refresh)(struct dev_monome *md);
 };
 
 // set a single grid led
@@ -47,6 +49,20 @@ extern void dev_monome_set_rotation(struct dev_monome *md, uint8_t val);
 // grid tilt enable/disable
 extern void dev_monome_tilt_enable(struct dev_monome *md, uint8_t val);
 extern void dev_monome_tilt_disable(struct dev_monome *md, uint8_t val);
+
+// a grid with no libmonome device behind it: led data is handed to `refresh`
+// and the owner posts the key events itself. cols and rows are 1 to
+// DEV_MONOME_VIRTUAL_MAX (the led data holds four 8x8 quads); NULL otherwise
+#define DEV_MONOME_VIRTUAL_MAX 16
+extern struct dev_monome *dev_monome_new_virtual_grid(int cols, int rows, const char *serial, const char *name,
+                                                      void (*refresh)(struct dev_monome *md));
+// the led levels of a virtual grid, row by row: cols * rows bytes into `out`.
+// for `refresh`, which runs on the lua thread
+extern void dev_monome_virtual_grid_levels(struct dev_monome *md, uint8_t *out);
+// the same for an arc: four rings of 64 leds in `data`. Lua takes a monome
+// device for an arc when its name starts with "monome arc"
+extern struct dev_monome *dev_monome_new_virtual_arc(const char *serial, const char *name,
+                                                     void (*refresh)(struct dev_monome *md));
 
 // device management
 extern int dev_monome_init(void *self);
