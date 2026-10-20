@@ -47,6 +47,10 @@ static struct dev_node *dev_lookup_path(const char *path, struct dev_node *node_
     return NULL;
 }
 
+uint32_t dev_list_new_id(void) {
+    return id++;
+}
+
 void dev_list_init(void) {
     dq.size = 0;
     dq.head = NULL;
