@@ -107,7 +107,9 @@ static struct dev_monome *dev_monome_new_virtual(device_monome_type_t type, int 
     md->type = type;
     md->cols = cols;
     md->rows = rows;
-    md->quads = type == DEVICE_MONOME_TYPE_ARC ? 4 : (rows * cols) / 64;
+    // the quads in use, counted up to the highest index: 8x16 uses quads 0
+    // and 2, and all_led() and refresh go through md->quads of them
+    md->quads = type == DEVICE_MONOME_TYPE_ARC ? 4 : 1 + (cols > 8) + 2 * (rows > 8);
     memcpy(md->quad_xoff, quad_xoff, sizeof(quad_xoff));
     memcpy(md->quad_yoff, quad_yoff, sizeof(quad_yoff));
     md->virtual_refresh = refresh;
@@ -116,6 +118,9 @@ static struct dev_monome *dev_monome_new_virtual(device_monome_type_t type, int 
 
 struct dev_monome *dev_monome_new_virtual_grid(int cols, int rows, const char *serial, const char *name,
                                                void (*refresh)(struct dev_monome *md)) {
+    if (cols < 1 || cols > DEV_MONOME_VIRTUAL_MAX || rows < 1 || rows > DEV_MONOME_VIRTUAL_MAX) {
+        return NULL;
+    }
     return dev_monome_new_virtual(DEVICE_MONOME_TYPE_GRID, cols, rows, serial, name, refresh);
 }
 
@@ -134,6 +139,14 @@ static inline uint8_t dev_monome_quad_idx(struct dev_monome *md, uint8_t x, uint
 // calcalate offset into quad data given x/y
 static inline uint8_t dev_monome_quad_offset(uint8_t x, uint8_t y) {
     return ((y & 7) * 8) + (x & 7);
+}
+
+void dev_monome_virtual_grid_levels(struct dev_monome *md, uint8_t *out) {
+    for (int y = 0; y < md->rows; y++) {
+        for (int x = 0; x < md->cols; x++) {
+            out[y * md->cols + x] = md->data[dev_monome_quad_idx(md, x, y)][dev_monome_quad_offset(x, y)];
+        }
+    }
 }
 
 // set grid rotation
