@@ -64,7 +64,12 @@ if ! jack_lsp >/dev/null 2>&1; then
   log "starting JACK"
   jack_control start >/dev/null 2>&1
   for _ in $(seq 20); do jack_lsp >/dev/null 2>&1 && break; sleep 0.25; done
-  jack_lsp >/dev/null 2>&1 || { log "JACK is not running and jack_control start failed"; exit 1; }
+  if ! jack_lsp >/dev/null 2>&1; then
+    log "JACK is not running and jack_control start failed"
+    log "check the device with 'jack_control dp' and the log ~/.log/jack/jackdbus.log:"
+    grep -a ERROR ~/.log/jack/jackdbus.log 2>/dev/null | tail -4 | sed 's/\x1b\[[0-9;]*m//g' >&2
+    exit 1
+  fi
 fi
 
 if sc_port_open; then
