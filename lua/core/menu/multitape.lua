@@ -2,10 +2,11 @@
 -- 4TRK: a 4-track tape view in the spirit of the OP-1 tape.
 -- the playhead is fixed in the centre and the tape scrolls past it.
 --
--- E2 select track        K2 play / stop
--- E3 scrub               K3 record-arm selected track (punch in/out while playing)
--- K1+E2 track level      K1+K2 back to start
--- K1+E3 zoom             K1+K3 track / project actions
+-- E2 select track          K2 play / stop
+-- E3 scrub (beats w/ grid) K3 record-arm selected track (punch in/out while playing)
+-- K1+E2 zoom               K1+K2 back to loop start (or tape start)
+-- K1+E3 shuttle: hold K1 and turn for ff / rewind; release K1 to go back
+-- K1+K3 track / loop / project actions
 
 local fileselect = require 'fileselect'
 local listselect = require 'listselect'
@@ -14,9 +15,13 @@ local textentry = require 'textentry'
 local MT = audio.multitape
 
 local PLAYHEAD_X = 64
-local TRACK_Y = {26, 36, 46, 56}
+local LOOP_Y = 21
+local TRACK_Y = {28, 38, 48, 58}
 local ZOOMS = {1/128, 1/64, 1/32, 1/16, 1/8, 1/4, 1/2, 1, 2, 3} -- seconds per pixel
 local TICKS = {0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60}             -- seconds
+local BEAT_TICKS = {1/4, 1/2, 1, 2, 4, 8, 16, 32, 64}            -- beats
+local SHUTTLE = {-16, -8, -4, -2, -1, -0.5, 0.5, 1, 2, 4, 8, 16} -- rates
+local SHUTTLE_NORMAL = 8
 local FPS = 20
 
 local m = {
@@ -26,6 +31,7 @@ local m = {
   modal = false,
   msg = nil,
   msg_until = 0,
+  shuttle = nil, -- {idx, was_playing} while K1+E3 shuttles
 }
 
 local function now() return util.time() end
@@ -41,6 +47,8 @@ local function format_time(s)
   return string.format("%d:%04.1f", mins, secs)
 end
 
+local function grid_on() return params:get("mtape_grid") == 2 end
+
 local function refresh_status()
   m.status = MT.status()
 end
@@ -49,6 +57,13 @@ end
 local function set_armed(track)
   MT.arm(track)
   MT.rec(track > 0)
+end
+
+local function end_shuttle()
+  if not m.shuttle then return end
+  MT.rate(1)
+  if not m.shuttle.was_playing then MT.stop() end
+  m.shuttle = nil
 end
 
 local function modal(fn)
@@ -78,15 +93,12 @@ local function load_file(at_playhead)
   end)
 end
 
-local function save_project()
+local function name_prompt(heading, default, fn)
   modal(function()
     textentry.enter(function(name)
-      if name and name ~= "" then
-        MT.save(name)
-        flash("SAVED " .. name)
-      end
+      if name and name ~= "" then fn(name) end
       end_modal()
-    end, os.date("%y%m%d-%H%M"), "save 4trk as:")
+    end, default, heading)
   end)
 end
 
@@ -109,38 +121,62 @@ local function open_project()
   end)
 end
 
-local function track_actions()
+local function set_loop_point(which)
+  local t = MT.snap(m.status.pos)
+  local s, e = params:get("mtape_loop_start"), params:get("mtape_loop_end")
+  if which == "in" then s = t else e = t end
+  if e < s then s, e = e, s end
+  params:set("mtape_loop_start", s)
+  params:set("mtape_loop_end", e)
+  flash(string.format("LOOP %s-%s", format_time(s), format_time(e)))
+end
+
+local function actions()
   local t = m.track
   local muted = params:get("mtape_mute_" .. t) == 1
-  local options = {
-    "load file at start",
-    "load file at playhead",
-    muted and "unmute track " .. t or "mute track " .. t,
-    "clear track " .. t,
-    "save 4trk",
-    "open 4trk",
+  local looping = params:get("mtape_loop") == 1
+  local items = {
+    {"load file at start", function() load_file(false); return true end},
+    {"load file at playhead", function() load_file(true); return true end},
+    {(muted and "unmute" or "mute") .. " track " .. t, function()
+      params:set("mtape_mute_" .. t, muted and 0 or 1)
+    end},
+    {"clear track " .. t, function()
+      if m.status.armed == t then set_armed(0) end
+      MT.clear(t)
+      flash("CLEARED " .. t)
+    end},
+    {"loop in = playhead", function() set_loop_point("in") end},
+    {"loop out = playhead", function() set_loop_point("out") end},
+    {looping and "loop off" or "loop on", function()
+      params:set("mtape_loop", looping and 0 or 1)
+    end},
+    {"grid " .. (grid_on() and "off" or "on"), function()
+      params:set("mtape_grid", grid_on() and 1 or 2)
+    end},
+    {"mix down", function()
+      name_prompt("mix down as:", "mix-" .. os.date("%y%m%d-%H%M"), function(name)
+        MT.mixdown(name)
+        flash("MIXING " .. name)
+      end)
+      return true
+    end},
+    {"save 4trk", function()
+      name_prompt("save 4trk as:", os.date("%y%m%d-%H%M"), function(name)
+        MT.save(name)
+        flash("SAVED " .. name)
+      end)
+      return true
+    end},
+    {"open 4trk", function() open_project(); return true end},
   }
+  local labels = {}
+  for i, item in ipairs(items) do labels[i] = item[1] end
   modal(function()
-    listselect.enter(options, function(choice)
+    listselect.enter(labels, function(choice)
       local deferred = false
-      if choice == options[1] then
-        deferred = true
-        load_file(false)
-      elseif choice == options[2] then
-        deferred = true
-        load_file(true)
-      elseif choice == options[3] then
-        params:set("mtape_mute_" .. t, muted and 0 or 1)
-      elseif choice == options[4] then
-        if m.status.armed == t then set_armed(0) end
-        MT.clear(t)
-        flash("CLEARED " .. t)
-      elseif choice == options[5] then
-        deferred = true
-        save_project()
-      elseif choice == options[6] then
-        deferred = true
-        open_project()
+      for _, item in ipairs(items) do
+        if item[1] == choice then deferred = item[2]() == true end
       end
       if not deferred then end_modal() end
     end)
@@ -150,11 +186,17 @@ end
 --- input
 
 m.key = function(n, z)
-  if z ~= 1 or not m.status then return end
+  if not m.status then return end
+  -- releasing K1 ends a shuttle
+  if n == 1 and z == 0 then
+    end_shuttle()
+    return
+  end
+  if z ~= 1 then return end
   local s = m.status
   if n == 2 then
     if _menu.alt then
-      MT.seek(0)
+      MT.seek(s.loop and s.loop_start or 0)
     elseif s.playing then
       MT.stop()
     else
@@ -162,7 +204,7 @@ m.key = function(n, z)
     end
   elseif n == 3 then
     if _menu.alt then
-      track_actions()
+      actions()
     elseif s.armed == m.track then
       set_armed(0)
     else
@@ -177,14 +219,21 @@ m.enc = function(n, d)
   if not m.status then return end
   if n == 2 then
     if _menu.alt then
-      params:delta("mtape_level_" .. m.track, d)
-      flash(string.format("TRACK %d %s", m.track, params:string("mtape_level_" .. m.track)), 1)
+      m.zoom = util.clamp(m.zoom + d, 1, #ZOOMS)
     else
       m.track = util.clamp(m.track + d, 1, MT.TRACKS)
     end
   elseif n == 3 then
     if _menu.alt then
-      m.zoom = util.clamp(m.zoom + d, 1, #ZOOMS)
+      if not m.shuttle then
+        m.shuttle = {idx = SHUTTLE_NORMAL, was_playing = m.status.playing}
+      end
+      m.shuttle.idx = util.clamp(m.shuttle.idx + d, 1, #SHUTTLE)
+      MT.rate(SHUTTLE[m.shuttle.idx])
+      if not m.status.playing then MT.play() end
+    elseif grid_on() then
+      local beat = MT.beat_sec()
+      MT.seek(util.clamp(MT.snap(m.status.pos) + d * beat, 0, m.status.max))
     else
       local spp = ZOOMS[m.zoom]
       MT.seek(util.clamp(m.status.pos + d * 4 * spp, 0, m.status.max))
@@ -196,6 +245,9 @@ end
 
 --- drawing
 
+-- x position of a tape time
+local function tx(s, t, spp) return PLAYHEAD_X + (t - s.pos) / spp end
+
 local function draw_header(s)
   -- selected track box
   screen.level(15)
@@ -205,7 +257,11 @@ local function draw_header(s)
   screen.text_center(m.track)
 
   local state
-  if s.recording then state = "REC"
+  if s.recording and s.rate == 1 then state = "REC"
+  elseif s.playing and math.abs(s.rate - 1) > 0.01 then
+    local r = math.abs(s.rate)
+    local fmt = r < 1 and "%s%.1fx" or "%s%dx"
+    state = string.format(fmt, s.rate < 0 and "<<" or ">>", r < 1 and r or math.floor(r + 0.5))
   elseif s.playing then state = "PLAY"
   elseif s.armed > 0 then state = "ARM " .. s.armed
   else state = "STOP" end
@@ -219,7 +275,7 @@ local function draw_header(s)
   elseif s.busy > 0 then msg = "BUSY" end
   if msg then
     screen.level(4)
-    screen.move(78, 9)
+    screen.move(84, 9)
     screen.text_right(msg)
   end
 
@@ -229,22 +285,46 @@ local function draw_header(s)
 end
 
 local function draw_ruler(s, spp)
-  -- pick a tick spacing of at least 8 pixels
-  local tick = TICKS[#TICKS]
-  for _, t in ipairs(TICKS) do
-    if t / spp >= 8 then tick = t; break end
-  end
   local t0 = s.pos - PLAYHEAD_X * spp
+  local t1 = s.pos + (128 - PLAYHEAD_X) * spp
+  local tick, major_every
+  if grid_on() then
+    -- beat grid from the clock tempo; bars are major ticks
+    local beat = MT.beat_sec()
+    local bar = params:get("mtape_bar")
+    local beats = BEAT_TICKS[#BEAT_TICKS]
+    for _, b in ipairs(BEAT_TICKS) do
+      if b * beat / spp >= 6 then beats = b; break end
+    end
+    tick = beats * beat
+    major_every = math.max(1, math.floor(bar / beats + 0.5))
+  else
+    tick = TICKS[#TICKS]
+    for _, t in ipairs(TICKS) do
+      if t / spp >= 8 then tick = t; break end
+    end
+    major_every = 4
+  end
   local first = math.ceil(math.max(0, t0) / tick)
-  local last = math.floor(math.min(s.max, s.pos + (128 - PLAYHEAD_X) * spp) / tick)
+  local last = math.floor(math.min(s.max, t1) / tick)
   for i = first, last do
-    local x = math.floor((i * tick - t0) / spp) + 0.5
-    local major = i % 4 == 0
+    local x = math.floor(tx(s, i * tick, spp)) + 0.5
+    local major = i % major_every == 0
     screen.level(major and 4 or 2)
-    screen.move(x, 15)
-    screen.line(x, major and 19 or 17)
+    screen.move(x, 13)
+    screen.line(x, major and 17 or 15)
     screen.stroke()
   end
+end
+
+local function draw_loop(s, spp)
+  if s.loop_end <= s.loop_start then return end
+  local x0 = math.max(0, math.floor(tx(s, s.loop_start, spp)))
+  local x1 = math.min(128, math.floor(tx(s, s.loop_end, spp)))
+  if x1 <= 0 or x0 >= 128 then return end
+  screen.level(s.loop and 10 or 2)
+  screen.rect(x0, LOOP_Y - 1, math.max(1, x1 - x0), 2)
+  screen.fill()
 end
 
 local function draw_tracks(s, spp)
@@ -265,8 +345,7 @@ local function draw_tracks(s, spp)
 
     if n > 0 then
       local peaks = MT.overview(t, start, spp, n)
-      local lvl = muted and 2 or (selected and 15 or 6)
-      screen.level(lvl)
+      screen.level(muted and 2 or (selected and 15 or 6))
       for i = 1, n do
         local p = peaks[i]
         if p > 0 then
@@ -305,10 +384,11 @@ m.redraw = function()
   screen.font_size(8)
   draw_header(s)
   draw_ruler(s, spp)
+  draw_loop(s, spp)
   draw_tracks(s, spp)
   -- playhead
   screen.level(s.recording and 15 or 8)
-  screen.move(PLAYHEAD_X + 0.5, 13)
+  screen.move(PLAYHEAD_X + 0.5, 12)
   screen.line(PLAYHEAD_X + 0.5, 64)
   screen.stroke()
   _menu.draw_panel()
@@ -328,6 +408,7 @@ m.init = function()
 end
 
 m.deinit = function()
+  end_shuttle()
   _menu.timer:stop()
 end
 
