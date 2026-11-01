@@ -22,8 +22,14 @@ local KEY1_HOLD_TIME = 0.25
 
 _menu.mode = false
 _menu.page = "HOME"
-_menu.panel = 3
-_menu.panels = {"MIX", "TAPE", "HOME", "PARAMS"}
+_menu.panels = {"MIX", "4TRK", "TAPE", "HOME", "PARAMS"}
+-- index of a panel by page name
+function _menu.panel_index(page)
+  for i, p in ipairs(_menu.panels) do
+    if p == page then return i end
+  end
+end
+_menu.panel = _menu.panel_index("HOME")
 _menu.alt = false
 _menu.scripterror = false
 _menu.locked = false
@@ -96,7 +102,7 @@ end
 
 norns.init_done = function(status)
   _menu.set_page("HOME")
-  _menu.panel = 3
+  _menu.panel = _menu.panel_index("HOME")
   if status == true then
     _menu.scripterror = false
     m["PARAMS"].pos = 0
@@ -114,7 +120,7 @@ end
 _menu.enc = function(n, delta)
   if n==1 and _menu.alt == false then
     --mix:delta("output",delta)
-    local c = util.clamp(_menu.panel+delta,1,4)
+    local c = util.clamp(_menu.panel+delta,1,#_menu.panels)
     if c ~= _menu.panel then
       _menu.shownav = true
       _menu.panel = c
@@ -210,10 +216,12 @@ function _menu.draw_panel()
   if _menu.shownav then
     screen.aa(1)
     screen.line_width(1)
-    for i = 1,4 do
+    local n = #_menu.panels
+    local w = (128 + 3) / n
+    for i = 1,n do
       screen.level(i == _menu.panel and 8 or 2)
-      screen.move((i-1)*33,0)
-      screen.line_rel(30,0)
+      screen.move(math.floor((i-1)*w),0)
+      screen.line_rel(math.floor(w)-3,0)
       screen.stroke()
     end
   end
@@ -223,17 +231,11 @@ end
 function _menu.keycode(c,value)
   -- those are globals and can't be overriden by a sub-menu
   if value>0 then
-    if c=="F1" then
-      _menu.set_page("MIX")
-      return
-    elseif c=="F2" then
-      _menu.set_page("TAPE")
-      return
-    elseif c=="F3" then
-      _menu.set_page("HOME")
-      return
-    elseif c=="F4" then
-      _menu.set_page("PARAMS")
+    -- F1..F5 select panels in order
+    local fn = tonumber(string.match(c, "^F(%d)$") or "")
+    if fn and _menu.panels[fn] then
+      _menu.panel = fn
+      _menu.set_page(_menu.panels[fn])
       return
     end
   end
@@ -303,7 +305,7 @@ function _menu.gamepad_button(b,value)
 
   if value == 1 and (b == "L1" or b == "R1") then
     local delta = b == "R1" and 1 or -1
-    local c = util.clamp(_menu.panel+delta,1,4)
+    local c = util.clamp(_menu.panel+delta,1,#_menu.panels)
     if c ~= _menu.panel then
       _menu.shownav = true
       _menu.panel = c
@@ -344,4 +346,5 @@ m["UPDATE"] = require 'core/menu/update'
 m["SLEEP"] = require 'core/menu/sleep'
 m["MIX"] = require 'core/menu/mix'
 m["TAPE"] = require 'core/menu/tape'
+m["4TRK"] = require 'core/menu/multitape'
 m["MODS"] = require 'core/menu/mods'
