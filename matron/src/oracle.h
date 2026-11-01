@@ -159,6 +159,10 @@ struct o_mtape_status {
     int mem_full;
     int jobs_pending;
     int dropped;
+    float rate;
+    int loop;
+    float loop_start_s;
+    float loop_end_s;
 };
 extern void o_mtape_play(int on);
 extern void o_mtape_seek(float sec);
@@ -173,6 +177,11 @@ extern void o_mtape_level_rev(float amp);
 extern void o_mtape_load(int track, const char *path, float sec);
 extern void o_mtape_save(const char *dir);
 extern void o_mtape_clear(int track);
+extern void o_mtape_rate(float rate);
+extern void o_mtape_rate_slew(float sec);
+extern void o_mtape_loop(int on);
+extern void o_mtape_loop_points(float start_s, float end_s);
+extern void o_mtape_mixdown(const char *path);
 extern void o_mtape_status(struct o_mtape_status *out);
 extern void o_mtape_overview(int track, float start_s, float bin_s, int num_bins, uint8_t *out);
 

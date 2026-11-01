@@ -298,6 +298,12 @@ void MixerClient::handleCommand(Commands::CommandPacket *p) {
     case Commands::Id::MTAPE_SOURCE:
         mtape.setSource(p->idx_0);
         break;
+    case Commands::Id::MTAPE_RATE:
+        mtape.setRate(p->value);
+        break;
+    case Commands::Id::MTAPE_RATE_SLEW:
+        mtape.setRateSlew(p->value);
+        break;
     default:;
         ;
     }

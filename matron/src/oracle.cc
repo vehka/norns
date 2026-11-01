@@ -579,6 +579,26 @@ void o_mtape_clear(int track) {
     crone_mtape_clear(track);
 }
 
+void o_mtape_rate(float rate) {
+    crone_mtape_rate(rate);
+}
+
+void o_mtape_rate_slew(float sec) {
+    crone_mtape_rate_slew(sec);
+}
+
+void o_mtape_loop(int on) {
+    crone_mtape_loop(on);
+}
+
+void o_mtape_loop_points(float start_s, float end_s) {
+    crone_mtape_loop_points(start_s, end_s);
+}
+
+void o_mtape_mixdown(const char *path) {
+    crone_mtape_mixdown(path);
+}
+
 void o_mtape_status(struct o_mtape_status *out) {
     const auto s = crone_mtape_status();
     const float sr = s.sampleRate > 0.f ? s.sampleRate : 48000.f;
@@ -596,6 +616,10 @@ void o_mtape_status(struct o_mtape_status *out) {
     out->mem_full = s.memFull;
     out->jobs_pending = s.jobsPending;
     out->dropped = s.droppedBlocks;
+    out->rate = s.rate;
+    out->loop = s.loop;
+    out->loop_start_s = static_cast<float>(s.loopStart) / sr;
+    out->loop_end_s = static_cast<float>(s.loopEnd) / sr;
 }
 
 void o_mtape_overview(int track, float start_s, float bin_s, int num_bins, uint8_t *out) {

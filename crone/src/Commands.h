@@ -104,6 +104,8 @@ class Commands {
         MTAPE_TRACK_PAN,   // idx_0: track, value: -1..1
         MTAPE_TRACK_MUTE,  // idx_0: track, value: 0/1
         MTAPE_SOURCE,      // idx_0: MultiTape::Source
+        MTAPE_RATE,        // value: playback rate target
+        MTAPE_RATE_SLEW,   // value: seconds
         NUM_COMMANDS,
     } Id;
 

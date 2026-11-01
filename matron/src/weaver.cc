@@ -256,6 +256,11 @@ static int _mtape_level_rev(lua_State *l);
 static int _mtape_load(lua_State *l);
 static int _mtape_save(lua_State *l);
 static int _mtape_clear(lua_State *l);
+static int _mtape_rate(lua_State *l);
+static int _mtape_rate_slew(lua_State *l);
+static int _mtape_loop(lua_State *l);
+static int _mtape_loop_points(lua_State *l);
+static int _mtape_mixdown(lua_State *l);
 static int _mtape_status(lua_State *l);
 static int _mtape_overview(lua_State *l);
 
@@ -487,6 +492,11 @@ void w_init(void) {
     lua_register_norns("mtape_load", &_mtape_load);
     lua_register_norns("mtape_save", &_mtape_save);
     lua_register_norns("mtape_clear", &_mtape_clear);
+    lua_register_norns("mtape_rate", &_mtape_rate);
+    lua_register_norns("mtape_rate_slew", &_mtape_rate_slew);
+    lua_register_norns("mtape_loop", &_mtape_loop);
+    lua_register_norns("mtape_loop_points", &_mtape_loop_points);
+    lua_register_norns("mtape_mixdown", &_mtape_mixdown);
     lua_register_norns("mtape_status", &_mtape_status);
     lua_register_norns("mtape_overview", &_mtape_overview);
 
@@ -3783,6 +3793,14 @@ int _mtape_status(lua_State *l) {
     lua_setfield(l, -2, "busy");
     lua_pushinteger(l, s.dropped);
     lua_setfield(l, -2, "dropped");
+    lua_pushnumber(l, s.rate);
+    lua_setfield(l, -2, "rate");
+    lua_pushboolean(l, s.loop);
+    lua_setfield(l, -2, "loop");
+    lua_pushnumber(l, s.loop_start_s);
+    lua_setfield(l, -2, "loop_start");
+    lua_pushnumber(l, s.loop_end_s);
+    lua_setfield(l, -2, "loop_end");
     return 1;
 }
 
@@ -3801,4 +3819,34 @@ int _mtape_overview(lua_State *l) {
         lua_rawseti(l, -2, i + 1);
     }
     return 1;
+}
+
+int _mtape_rate(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_rate((float)luaL_checknumber(l, 1));
+    return 0;
+}
+
+int _mtape_rate_slew(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_rate_slew((float)luaL_checknumber(l, 1));
+    return 0;
+}
+
+int _mtape_loop(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_loop(mtape_check_bool(l, 1));
+    return 0;
+}
+
+int _mtape_loop_points(lua_State *l) {
+    lua_check_num_args(2);
+    o_mtape_loop_points((float)luaL_checknumber(l, 1), (float)luaL_checknumber(l, 2));
+    return 0;
+}
+
+int _mtape_mixdown(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_mixdown(luaL_checkstring(l, 1));
+    return 0;
 }

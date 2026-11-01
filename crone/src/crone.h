@@ -426,6 +426,11 @@ void crone_mtape_level_rev(float amp);
 void crone_mtape_load(int track, const char *path, float sec);
 void crone_mtape_save(const char *dir);
 void crone_mtape_clear(int track);
+void crone_mtape_rate(float rate);
+void crone_mtape_rate_slew(float sec);
+void crone_mtape_loop(int on);
+void crone_mtape_loop_points(float startSec, float endSec);
+void crone_mtape_mixdown(const char *path);
 crone::MultiTape::Status crone_mtape_status();
 // peak (0-255) per bin for numBins bins of binSec starting at startSec
 void crone_mtape_overview(int track, float startSec, float binSec, int numBins, uint8_t *out);

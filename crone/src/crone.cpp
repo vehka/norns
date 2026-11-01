@@ -250,3 +250,23 @@ void crone_mtape_overview(int track, float startSec, float binSec, int numBins, 
     mixerClient->getMultiTape().overview(track, mtape_frames(startSec),
                                          std::max<size_t>(1, mtape_frames(binSec)), numBins, out);
 }
+
+void crone_mtape_rate(float rate) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_RATE, rate);
+}
+
+void crone_mtape_rate_slew(float sec) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_RATE_SLEW, sec);
+}
+
+void crone_mtape_loop(int on) {
+    mixerClient->getMultiTape().setLoop(on != 0);
+}
+
+void crone_mtape_loop_points(float startSec, float endSec) {
+    mixerClient->getMultiTape().setLoopPoints(mtape_frames(startSec), mtape_frames(endSec));
+}
+
+void crone_mtape_mixdown(const char *path) {
+    mixerClient->getMultiTape().requestMixdown(path);
+}
