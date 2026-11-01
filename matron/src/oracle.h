@@ -144,6 +144,38 @@ extern void o_tape_pause();
 extern void o_tape_resume();
 extern void o_tape_loop(int enabled);
 
+//--- multitape (tracks 0-based, times in seconds)
+#define O_MTAPE_TRACKS 4
+struct o_mtape_status {
+    int playing;
+    int recording;
+    int armed; // -1 = none
+    int source;
+    int channels;
+    float pos_s;
+    float max_s;
+    float end_s[O_MTAPE_TRACKS];
+    size_t mem_bytes;
+    int mem_full;
+    int jobs_pending;
+    int dropped;
+};
+extern void o_mtape_play(int on);
+extern void o_mtape_seek(float sec);
+extern void o_mtape_arm(int track);
+extern void o_mtape_rec(int on);
+extern void o_mtape_track_level(int track, float amp);
+extern void o_mtape_track_pan(int track, float pan);
+extern void o_mtape_track_mute(int track, int mute);
+extern void o_mtape_source(int source);
+extern void o_mtape_level(float amp);
+extern void o_mtape_level_rev(float amp);
+extern void o_mtape_load(int track, const char *path, float sec);
+extern void o_mtape_save(const char *dir);
+extern void o_mtape_clear(int track);
+extern void o_mtape_status(struct o_mtape_status *out);
+extern void o_mtape_overview(int track, float start_s, float bin_s, int num_bins, uint8_t *out);
+
 //--- cut
 extern void o_set_level_adc_cut(float value);
 extern void o_set_level_ext_cut(float value);

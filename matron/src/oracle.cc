@@ -526,6 +526,82 @@ void o_tape_resume() {
     crone_tape_resume();
 }
 
+//---- multitape
+void o_mtape_play(int on) {
+    crone_mtape_play(on);
+}
+
+void o_mtape_seek(float sec) {
+    crone_mtape_seek(sec);
+}
+
+void o_mtape_arm(int track) {
+    crone_mtape_arm(track);
+}
+
+void o_mtape_rec(int on) {
+    crone_mtape_rec(on);
+}
+
+void o_mtape_track_level(int track, float amp) {
+    crone_mtape_track_level(track, amp);
+}
+
+void o_mtape_track_pan(int track, float pan) {
+    crone_mtape_track_pan(track, pan);
+}
+
+void o_mtape_track_mute(int track, int mute) {
+    crone_mtape_track_mute(track, mute);
+}
+
+void o_mtape_source(int source) {
+    crone_mtape_source(source);
+}
+
+void o_mtape_level(float amp) {
+    crone_mtape_level(amp);
+}
+
+void o_mtape_level_rev(float amp) {
+    crone_mtape_level_rev(amp);
+}
+
+void o_mtape_load(int track, const char *path, float sec) {
+    crone_mtape_load(track, path, sec);
+}
+
+void o_mtape_save(const char *dir) {
+    crone_mtape_save(dir);
+}
+
+void o_mtape_clear(int track) {
+    crone_mtape_clear(track);
+}
+
+void o_mtape_status(struct o_mtape_status *out) {
+    const auto s = crone_mtape_status();
+    const float sr = s.sampleRate > 0.f ? s.sampleRate : 48000.f;
+    out->playing = s.playing;
+    out->recording = s.recording;
+    out->armed = s.armed;
+    out->source = s.source;
+    out->channels = s.channels;
+    out->pos_s = static_cast<float>(s.posFrame) / sr;
+    out->max_s = static_cast<float>(s.maxFrames) / sr;
+    for (int t = 0; t < O_MTAPE_TRACKS; ++t) {
+        out->end_s[t] = static_cast<float>(s.endFrame[t]) / sr;
+    }
+    out->mem_bytes = s.allocatedBytes;
+    out->mem_full = s.memFull;
+    out->jobs_pending = s.jobsPending;
+    out->dropped = s.droppedBlocks;
+}
+
+void o_mtape_overview(int track, float start_s, float bin_s, int num_bins, uint8_t *out) {
+    crone_mtape_overview(track, start_s, bin_s, num_bins, out);
+}
+
 void o_tape_loop(int enabled) {
     crone_tape_play_loop(enabled);
 }

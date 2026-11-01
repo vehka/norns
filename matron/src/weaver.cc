@@ -242,6 +242,23 @@ static int _tape_pause(lua_State *l);
 static int _tape_resume(lua_State *l);
 static int _tape_loop(lua_State *l);
 
+// multitape
+static int _mtape_play(lua_State *l);
+static int _mtape_seek(lua_State *l);
+static int _mtape_arm(lua_State *l);
+static int _mtape_rec(lua_State *l);
+static int _mtape_track_level(lua_State *l);
+static int _mtape_track_pan(lua_State *l);
+static int _mtape_track_mute(lua_State *l);
+static int _mtape_source(lua_State *l);
+static int _mtape_level(lua_State *l);
+static int _mtape_level_rev(lua_State *l);
+static int _mtape_load(lua_State *l);
+static int _mtape_save(lua_State *l);
+static int _mtape_clear(lua_State *l);
+static int _mtape_status(lua_State *l);
+static int _mtape_overview(lua_State *l);
+
 // cut
 static int _set_level_adc_cut(lua_State *l);
 static int _set_level_ext_cut(lua_State *l);
@@ -455,6 +472,23 @@ void w_init(void) {
     lua_register_norns("tape_pause", &_tape_pause);
     lua_register_norns("tape_resume", &_tape_resume);
     lua_register_norns("tape_loop", &_tape_loop);
+
+    // multitape
+    lua_register_norns("mtape_play", &_mtape_play);
+    lua_register_norns("mtape_seek", &_mtape_seek);
+    lua_register_norns("mtape_arm", &_mtape_arm);
+    lua_register_norns("mtape_rec", &_mtape_rec);
+    lua_register_norns("mtape_track_level", &_mtape_track_level);
+    lua_register_norns("mtape_track_pan", &_mtape_track_pan);
+    lua_register_norns("mtape_track_mute", &_mtape_track_mute);
+    lua_register_norns("mtape_source", &_mtape_source);
+    lua_register_norns("mtape_level", &_mtape_level);
+    lua_register_norns("mtape_level_rev", &_mtape_level_rev);
+    lua_register_norns("mtape_load", &_mtape_load);
+    lua_register_norns("mtape_save", &_mtape_save);
+    lua_register_norns("mtape_clear", &_mtape_clear);
+    lua_register_norns("mtape_status", &_mtape_status);
+    lua_register_norns("mtape_overview", &_mtape_overview);
 
     // polls
     lua_register_norns("poll_start_vu", &_poll_start_vu);
@@ -3616,3 +3650,155 @@ int _platform_shield(lua_State *l) {
 }
 
 #pragma GCC diagnostic pop
+
+//---- multitape
+// tracks are 1-based in lua (0 = none for arm); sources are 1-based
+
+static int mtape_check_bool(lua_State *l, int idx) {
+    if (lua_isboolean(l, idx)) {
+        return lua_toboolean(l, idx);
+    }
+    return luaL_checknumber(l, idx) != 0 ? 1 : 0;
+}
+
+static int mtape_check_track(lua_State *l, int idx) {
+    int t = (int)luaL_checkinteger(l, idx);
+    luaL_argcheck(l, t >= 1 && t <= O_MTAPE_TRACKS, idx, "track out of range");
+    return t - 1;
+}
+
+int _mtape_play(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_play(mtape_check_bool(l, 1));
+    return 0;
+}
+
+int _mtape_seek(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_seek((float)luaL_checknumber(l, 1));
+    return 0;
+}
+
+int _mtape_arm(lua_State *l) {
+    lua_check_num_args(1);
+    int t = (int)luaL_checkinteger(l, 1);
+    luaL_argcheck(l, t >= 0 && t <= O_MTAPE_TRACKS, 1, "track out of range");
+    o_mtape_arm(t - 1);
+    return 0;
+}
+
+int _mtape_rec(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_rec(mtape_check_bool(l, 1));
+    return 0;
+}
+
+int _mtape_track_level(lua_State *l) {
+    lua_check_num_args(2);
+    o_mtape_track_level(mtape_check_track(l, 1), (float)luaL_checknumber(l, 2));
+    return 0;
+}
+
+int _mtape_track_pan(lua_State *l) {
+    lua_check_num_args(2);
+    o_mtape_track_pan(mtape_check_track(l, 1), (float)luaL_checknumber(l, 2));
+    return 0;
+}
+
+int _mtape_track_mute(lua_State *l) {
+    lua_check_num_args(2);
+    o_mtape_track_mute(mtape_check_track(l, 1), mtape_check_bool(l, 2));
+    return 0;
+}
+
+int _mtape_source(lua_State *l) {
+    lua_check_num_args(1);
+    int s = (int)luaL_checkinteger(l, 1);
+    luaL_argcheck(l, s >= 1 && s <= 4, 1, "source out of range");
+    o_mtape_source(s - 1);
+    return 0;
+}
+
+int _mtape_level(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_level((float)luaL_checknumber(l, 1));
+    return 0;
+}
+
+int _mtape_level_rev(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_level_rev((float)luaL_checknumber(l, 1));
+    return 0;
+}
+
+int _mtape_load(lua_State *l) {
+    lua_check_num_args(3);
+    int t = mtape_check_track(l, 1);
+    const char *path = luaL_checkstring(l, 2);
+    o_mtape_load(t, path, (float)luaL_checknumber(l, 3));
+    return 0;
+}
+
+int _mtape_save(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_save(luaL_checkstring(l, 1));
+    return 0;
+}
+
+int _mtape_clear(lua_State *l) {
+    lua_check_num_args(1);
+    o_mtape_clear(mtape_check_track(l, 1));
+    return 0;
+}
+
+int _mtape_status(lua_State *l) {
+    struct o_mtape_status s;
+    o_mtape_status(&s);
+    lua_createtable(l, 0, 12);
+    lua_pushboolean(l, s.playing);
+    lua_setfield(l, -2, "playing");
+    lua_pushboolean(l, s.recording);
+    lua_setfield(l, -2, "recording");
+    lua_pushinteger(l, s.armed + 1);
+    lua_setfield(l, -2, "armed");
+    lua_pushinteger(l, s.source + 1);
+    lua_setfield(l, -2, "source");
+    lua_pushinteger(l, s.channels);
+    lua_setfield(l, -2, "channels");
+    lua_pushnumber(l, s.pos_s);
+    lua_setfield(l, -2, "pos");
+    lua_pushnumber(l, s.max_s);
+    lua_setfield(l, -2, "max");
+    lua_createtable(l, O_MTAPE_TRACKS, 0);
+    for (int t = 0; t < O_MTAPE_TRACKS; ++t) {
+        lua_pushnumber(l, s.end_s[t]);
+        lua_rawseti(l, -2, t + 1);
+    }
+    lua_setfield(l, -2, "ends");
+    lua_pushinteger(l, (lua_Integer)s.mem_bytes);
+    lua_setfield(l, -2, "mem");
+    lua_pushboolean(l, s.mem_full);
+    lua_setfield(l, -2, "mem_full");
+    lua_pushinteger(l, s.jobs_pending);
+    lua_setfield(l, -2, "busy");
+    lua_pushinteger(l, s.dropped);
+    lua_setfield(l, -2, "dropped");
+    return 1;
+}
+
+int _mtape_overview(lua_State *l) {
+    lua_check_num_args(4);
+    int t = mtape_check_track(l, 1);
+    float start = (float)luaL_checknumber(l, 2);
+    float bin = (float)luaL_checknumber(l, 3);
+    int n = (int)luaL_checkinteger(l, 4);
+    luaL_argcheck(l, n >= 1 && n <= 1024, 4, "bin count out of range");
+    uint8_t peaks[1024];
+    o_mtape_overview(t, start, bin, n, peaks);
+    lua_createtable(l, n, 0);
+    for (int i = 0; i < n; ++i) {
+        lua_pushnumber(l, peaks[i] / 255.0);
+        lua_rawseti(l, -2, i + 1);
+    }
+    return 1;
+}
