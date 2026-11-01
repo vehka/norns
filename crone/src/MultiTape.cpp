@@ -112,6 +112,7 @@ void MultiTape::init(float sampleRate, int channels, bool startWorker) {
     numPeaks = numChunks * PeaksPerChunk;
     chunkSamples = ChunkFrames * chans;
     fadeFrames = std::max<size_t>(1, static_cast<size_t>(0.005f * sr));
+    setRateSlew(0.1f);
 
     for (auto &t : tracks) {
         t.chunks.reset(new std::atomic<Sample *>[numChunks]);
@@ -139,6 +140,7 @@ void MultiTape::setPlaying(bool play) {
     if (play) {
         if (!playing.load(std::memory_order_relaxed)) {
             transportGain = 0.f;
+            rate = rateTarget; // a stopped tape starts at the target rate
             playing.store(true, std::memory_order_relaxed);
         }
         stopPending = false;
@@ -156,6 +158,7 @@ void MultiTape::seek(size_t frame) {
         seekPending = true;
         seekTarget = frame;
     } else {
+        phase = static_cast<double>(frame);
         pos.store(frame, std::memory_order_relaxed);
     }
 }
@@ -170,19 +173,19 @@ void MultiTape::setRecord(bool rec) {
 
 void MultiTape::setTrackLevel(int track, float amp) {
     if (track >= 0 && track < NumTracks) {
-        tracks[track].level = std::max(0.f, amp);
+        tracks[track].level.store(std::max(0.f, amp), std::memory_order_relaxed);
     }
 }
 
 void MultiTape::setTrackPan(int track, float pan) {
     if (track >= 0 && track < NumTracks) {
-        tracks[track].pan = std::max(-1.f, std::min(1.f, pan));
+        tracks[track].pan.store(std::max(-1.f, std::min(1.f, pan)), std::memory_order_relaxed);
     }
 }
 
 void MultiTape::setTrackMute(int track, bool mute) {
     if (track >= 0 && track < NumTracks) {
-        tracks[track].mute = mute;
+        tracks[track].mute.store(mute, std::memory_order_relaxed);
     }
 }
 
@@ -190,6 +193,75 @@ void MultiTape::setSource(int src) {
     if (src >= 0 && src < NumSources) {
         source.store(src, std::memory_order_relaxed);
     }
+}
+
+void MultiTape::setRate(float r) {
+    rateTarget = std::max(-32.f, std::min(32.f, r));
+}
+
+void MultiTape::setRateSlew(float seconds) {
+    // time to cover ~63% of a rate change
+    const float frames = std::max(1.f, seconds * sr);
+    rateCoef = 1.f - std::exp(-1.f / frames);
+}
+
+void MultiTape::setLoop(bool on) {
+    loopOn.store(on, std::memory_order_relaxed);
+}
+
+void MultiTape::setLoopPoints(size_t start, size_t end) {
+    if (maxFrames == 0) {
+        return;
+    }
+    start = std::min(start, maxFrames - 1);
+    end = std::min(end, maxFrames - 1);
+    if (end < start) {
+        std::swap(start, end);
+    }
+    loopStart.store(start, std::memory_order_relaxed);
+    loopEnd.store(end, std::memory_order_relaxed);
+}
+
+void MultiTape::trackGains(int t, float &gl, float &gr) const {
+    const Track &tr = tracks[t];
+    const float g = tr.mute.load(std::memory_order_relaxed) ? 0.f : tr.level.load(std::memory_order_relaxed);
+    const float pan = tr.pan.load(std::memory_order_relaxed);
+    if (chans == 1) {
+        const float angle = (pan + 1.f) * 0.25f * static_cast<float>(M_PI);
+        gl = g * std::cos(angle);
+        gr = g * std::sin(angle);
+    } else {
+        gl = g * (pan > 0.f ? 1.f - pan : 1.f);
+        gr = g * (pan < 0.f ? 1.f + pan : 1.f);
+    }
+}
+
+void MultiTape::readAt(const Track &tr, double p, float &l, float &r) const {
+    const size_t i0 = static_cast<size_t>(p);
+    const float f = static_cast<float>(p - static_cast<double>(i0));
+    l = r = 0.f;
+    const Sample *d0 = tr.chunks[i0 >> ChunkShift].load(std::memory_order_acquire);
+    const size_t o0 = i0 & (ChunkFrames - 1);
+    float l0 = 0.f, r0 = 0.f;
+    if (d0 != nullptr) {
+        l0 = toFloat(d0[o0 * chans]);
+        r0 = chans == 2 ? toFloat(d0[o0 * 2 + 1]) : l0;
+    }
+    if (f == 0.f || i0 + 1 >= maxFrames) {
+        l = l0;
+        r = r0;
+        return;
+    }
+    const size_t i1 = i0 + 1;
+    const Sample *d1 = tr.chunks[i1 >> ChunkShift].load(std::memory_order_acquire);
+    const size_t o1 = i1 & (ChunkFrames - 1);
+    float l1 = 0.f, r1 = 0.f;
+    if (d1 != nullptr) {
+        l1 = toFloat(d1[o1 * chans]);
+        r1 = chans == 2 ? toFloat(d1[o1 * 2 + 1]) : l1;
+    }
+    l = l0 + (l1 - l0) * f;
+    r = r0 + (r1 - r0) * f;
 }
 
 size_t MultiTape::recOffset() const {
@@ -205,16 +277,7 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
     float targetL[NumTracks];
     float targetR[NumTracks];
     for (int t = 0; t < NumTracks; ++t) {
-        Track &tr = tracks[t];
-        float g = tr.mute ? 0.f : tr.level;
-        if (chans == 1) {
-            float angle = (tr.pan + 1.f) * 0.25f * static_cast<float>(M_PI);
-            targetL[t] = g * std::cos(angle);
-            targetR[t] = g * std::sin(angle);
-        } else {
-            targetL[t] = g * (tr.pan > 0.f ? 1.f - tr.pan : 1.f);
-            targetR[t] = g * (tr.pan < 0.f ? 1.f + tr.pan : 1.f);
-        }
+        trackGains(t, targetL[t], targetR[t]);
     }
 
     if (!playing.load(std::memory_order_relaxed) || numChunks == 0) {
@@ -222,6 +285,9 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
             tracks[t].gainL = targetL[t];
             tracks[t].gainR = targetR[t];
         }
+        // a stopped tape restarts at the target rate
+        rate = rateTarget;
+        ratePublished.store(rate, std::memory_order_relaxed);
         blockCount.fetch_add(1, std::memory_order_release);
         return;
     }
@@ -231,8 +297,15 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
     const int arm = armed.load(std::memory_order_relaxed);
     const bool rec = recEnabled.load(std::memory_order_relaxed);
     const size_t offset = recOffset();
+    const bool loop = loopOn.load(std::memory_order_relaxed);
+    const double ls = static_cast<double>(loopStart.load(std::memory_order_relaxed));
+    const double le = static_cast<double>(loopEnd.load(std::memory_order_relaxed));
+    const double len = le - ls;
+    const bool looping = loop && len >= 2.0 * static_cast<double>(fadeFrames);
+    // loop seam crossfade length
+    const double xf = looping ? std::min(2.0 * static_cast<double>(fadeFrames), len * 0.25) : 0.0;
+    const double last = static_cast<double>(maxFrames - 1);
     int rt = recTrack.load(std::memory_order_relaxed);
-    size_t p = pos.load(std::memory_order_relaxed);
     size_t end = rt >= 0 ? tracks[rt].endFrame.load(std::memory_order_relaxed) : 0;
     bool dropped = false;
 
@@ -246,7 +319,7 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
             transportGain = std::max(0.f, transportGain - rampInc);
             if (transportGain <= 0.f && recGain <= 0.f) {
                 if (seekPending) {
-                    p = seekTarget;
+                    phase = static_cast<double>(seekTarget);
                     seekPending = false;
                 }
                 if (stopPending) {
@@ -262,8 +335,20 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
             }
         }
 
-        // record gain; the record track only changes at zero gain
-        const bool wantRec = active && rec && arm >= 0;
+        // rate glide; at normal speed the playhead lands back on whole frames
+        if (rate != rateTarget) {
+            rate += (rateTarget - rate) * rateCoef;
+            if (std::fabs(rateTarget - rate) < 0.005f) {
+                rate = rateTarget;
+                if (rate == 1.f) {
+                    phase = std::floor(phase + 0.5);
+                }
+            }
+        }
+
+        // record gain; the record track only changes at zero gain.
+        // recording happens only at normal speed
+        const bool wantRec = active && rec && arm >= 0 && rate == 1.f;
         if (recGain <= 0.f) {
             int next = wantRec ? arm : -1;
             if (next != rt) {
@@ -281,39 +366,53 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
             recGain = std::max(recTarget, recGain - rampInc);
         }
 
+        // loop seam: crossfade toward the other end of the loop
+        double alt = -1.0;
+        float xa = 0.f;
+        if (looping) {
+            if (rate > 0.f && phase >= le - xf && phase < le && phase >= ls) {
+                alt = phase - len;
+                xa = static_cast<float>((phase - (le - xf)) / xf);
+            } else if (rate < 0.f && phase < ls + xf && phase >= ls && phase < le) {
+                alt = phase + len;
+                xa = static_cast<float>(((ls + xf) - phase) / xf);
+            }
+        }
+
         // playback
-        const size_t c = p >> ChunkShift;
-        const size_t o = p & (ChunkFrames - 1);
         const float x = static_cast<float>(i) * blockInc;
         float sumL = 0.f;
         float sumR = 0.f;
         for (int t = 0; t < NumTracks; ++t) {
-            const Sample *data = tracks[t].chunks[c].load(std::memory_order_acquire);
-            if (data == nullptr) {
-                continue;
-            }
             Track &tr = tracks[t];
+            float l, r;
+            readAt(tr, phase, l, r);
+            if (alt >= 0.0) {
+                float l2, r2;
+                readAt(tr, alt, l2, r2);
+                l += (l2 - l) * xa;
+                r += (r2 - r) * xa;
+            }
             float gl = tr.gainL + (targetL[t] - tr.gainL) * x;
             float gr = tr.gainR + (targetR[t] - tr.gainR) * x;
             if (t == rt) {
                 gl *= 1.f - recGain;
                 gr *= 1.f - recGain;
             }
-            if (chans == 1) {
-                float v = toFloat(data[o]);
-                sumL += v * gl;
-                sumR += v * gr;
-            } else {
-                sumL += toFloat(data[2 * o]) * gl;
-                sumR += toFloat(data[2 * o + 1]) * gr;
-            }
+            sumL += l * gl;
+            sumR += r * gr;
         }
         out[0][i] += sumL * transportGain;
         out[1][i] += sumR * transportGain;
 
         // record: overwrite at the latency-compensated write head
+        const size_t p = static_cast<size_t>(phase);
         if (recGain > 0.f && rt >= 0 && p >= offset) {
-            const size_t w = p - offset;
+            size_t w = p - offset;
+            // inside a loop the write head trails the playhead around the seam
+            if (looping && phase >= ls && phase < le && static_cast<double>(w) < ls) {
+                w += static_cast<size_t>(len);
+            }
             Sample *data = tracks[rt].chunks[w >> ChunkShift].load(std::memory_order_acquire);
             if (data == nullptr) {
                 dropped = true;
@@ -351,8 +450,21 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
             }
         }
 
-        if (++p >= maxFrames) {
-            p = maxFrames - 1;
+        // advance, wrapping inside the loop and stopping at the tape ends
+        const double prev = phase;
+        phase += static_cast<double>(rate);
+        if (looping) {
+            if (rate > 0.f && prev < le && phase >= le && prev >= ls) {
+                phase -= len;
+            } else if (rate < 0.f && prev >= ls && phase < ls && prev < le) {
+                phase += len;
+            }
+        }
+        if (phase >= last) {
+            phase = last;
+            stopPending = true;
+        } else if (phase < 0.0) {
+            phase = 0.0;
             stopPending = true;
         }
     }
@@ -365,7 +477,8 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
     if (dropped) {
         droppedBlocks.fetch_add(1, std::memory_order_relaxed);
     }
-    pos.store(p, std::memory_order_relaxed);
+    pos.store(static_cast<size_t>(phase), std::memory_order_relaxed);
+    ratePublished.store(rate, std::memory_order_relaxed);
     blockCount.fetch_add(1, std::memory_order_release);
 }
 
@@ -407,6 +520,10 @@ MultiTape::Status MultiTape::getStatus() const {
     s.memFull = memFull.load(std::memory_order_relaxed);
     s.jobsPending = jobsPending.load(std::memory_order_relaxed);
     s.droppedBlocks = droppedBlocks.load(std::memory_order_relaxed);
+    s.rate = ratePublished.load(std::memory_order_relaxed);
+    s.loop = loopOn.load(std::memory_order_relaxed);
+    s.loopStart = loopStart.load(std::memory_order_relaxed);
+    s.loopEnd = loopEnd.load(std::memory_order_relaxed);
     return s;
 }
 
@@ -461,6 +578,13 @@ void MultiTape::requestSave(const std::string &dir) {
 void MultiTape::requestClear(int track) {
     std::lock_guard<std::mutex> lock(jobMutex);
     jobs.push_back(Job{Job::Clear, track, std::string(), 0});
+    jobsPending.fetch_add(1);
+    jobCv.notify_one();
+}
+
+void MultiTape::requestMixdown(const std::string &path) {
+    std::lock_guard<std::mutex> lock(jobMutex);
+    jobs.push_back(Job{Job::Mixdown, -1, path, 0});
     jobsPending.fetch_add(1);
     jobCv.notify_one();
 }
@@ -643,6 +767,9 @@ void MultiTape::runJob(const Job &job) {
     case Job::Clear:
         doClear(job.track);
         break;
+    case Job::Mixdown:
+        doMixdown(job.path);
+        break;
     }
 }
 
@@ -782,4 +909,50 @@ void MultiTape::doClear(int track) {
         tr.peaks[b].store(0, std::memory_order_relaxed);
     }
     tr.endFrame.store(0);
+}
+
+void MultiTape::doMixdown(const std::string &path) {
+    float gl[NumTracks];
+    float gr[NumTracks];
+    size_t end = 0;
+    for (int t = 0; t < NumTracks; ++t) {
+        trackGains(t, gl[t], gr[t]);
+        if (gl[t] > 0.f || gr[t] > 0.f) {
+            end = std::max(end, tracks[t].endFrame.load());
+        }
+    }
+    if (end == 0) {
+        std::cerr << "multitape: nothing to mix down" << std::endl;
+        return;
+    }
+    SF_INFO info{};
+    info.samplerate = static_cast<int>(sr);
+    info.channels = 2;
+    info.format = SF_FORMAT_WAV | SF_FORMAT_PCM_24;
+    SNDFILE *f = sf_open(path.c_str(), SFM_WRITE, &info);
+    if (f == nullptr) {
+        std::cerr << "multitape: cannot write " << path << ": " << sf_strerror(nullptr) << std::endl;
+        return;
+    }
+    sf_command(f, SFC_SET_CLIPPING, nullptr, SF_TRUE);
+    constexpr size_t ioFrames = 4096;
+    std::vector<float> io(ioFrames * 2);
+    for (size_t start = 0; start < end; start += ioFrames) {
+        const size_t n = std::min(ioFrames, end - start);
+        std::fill(io.begin(), io.end(), 0.f);
+        for (int t = 0; t < NumTracks; ++t) {
+            if (gl[t] == 0.f && gr[t] == 0.f) {
+                continue;
+            }
+            for (size_t i = 0; i < n; ++i) {
+                float l, r;
+                readAt(tracks[t], static_cast<double>(start + i), l, r);
+                io[2 * i] += l * gl[t];
+                io[2 * i + 1] += r * gr[t];
+            }
+        }
+        sf_writef_float(f, io.data(), static_cast<sf_count_t>(n));
+    }
+    sf_close(f);
+    std::cout << "multitape: mixed down to " << path << std::endl;
 }

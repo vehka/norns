@@ -56,6 +56,10 @@ class MultiTape {
         bool memFull;
         int jobsPending;
         int droppedBlocks; // record blocks lost to missing chunks
+        float rate;        // current playback rate (1 = normal, <0 = reverse)
+        bool loop;
+        size_t loopStart;
+        size_t loopEnd;
     };
 
     // returns available system memory in bytes; replaceable for tests
@@ -86,6 +90,11 @@ class MultiTape {
     void setTrackPan(int track, float pan);
     void setTrackMute(int track, bool mute);
     void setSource(int source);
+    // playback rate target; the rate glides there (ff/rev). recording only at 1
+    void setRate(float rate);
+    void setRateSlew(float seconds);
+    void setLoop(bool on);
+    void setLoopPoints(size_t start, size_t end);
 
     //--- any thread
     void setLatency(size_t captureFrames, size_t playbackFrames);
@@ -100,6 +109,8 @@ class MultiTape {
     void requestLoad(int track, const std::string &path, size_t startFrame);
     void requestSave(const std::string &dir);
     void requestClear(int track);
+    // render all tracks with their level/pan/mute to a stereo 24-bit WAV
+    void requestMixdown(const std::string &path);
 
     // run one worker pass synchronously (tests, or no worker thread)
     void service();
@@ -115,18 +126,20 @@ class MultiTape {
         std::unique_ptr<std::atomic<Sample *>[]> chunks;
         std::unique_ptr<std::atomic<uint8_t>[]> peaks;
         std::atomic<size_t> endFrame{0};
-        // audio thread mix state
-        float level = 1.f;
-        float pan = 0.f;
-        bool mute = false;
-        float gainL = 0.f; // gains applied at end of previous block
+        // mix settings (also read by the worker for mixdown)
+        std::atomic<float> level{1.f};
+        std::atomic<float> pan{0.f};
+        std::atomic<bool> mute{false};
+        // audio thread: gains applied at end of previous block
+        float gainL = 0.f;
         float gainR = 0.f;
     };
 
     struct Job {
         enum Type { Load,
                     Save,
-                    Clear } type;
+                    Clear,
+                    Mixdown } type;
         int track;
         std::string path;
         size_t startFrame;
@@ -150,7 +163,15 @@ class MultiTape {
 
     //--- audio thread state (published via atomics where the worker needs it)
     std::atomic<bool> playing{false};
-    std::atomic<size_t> pos{0};
+    std::atomic<size_t> pos{0}; // published integer playhead
+    double phase = 0.0;         // audio thread fractional playhead
+    float rate = 1.f;
+    float rateTarget = 1.f;
+    float rateCoef = 0.001f; // one-pole glide coefficient per frame
+    std::atomic<float> ratePublished{1.f};
+    std::atomic<bool> loopOn{false};
+    std::atomic<size_t> loopStart{0};
+    std::atomic<size_t> loopEnd{0};
     std::atomic<int> armed{-1};
     std::atomic<bool> recEnabled{false};
     std::atomic<int> recTrack{-1};
@@ -196,6 +217,10 @@ class MultiTape {
     void doLoad(int track, const std::string &path, size_t startFrame);
     void doSave(const std::string &dir);
     void doClear(int track);
+    void doMixdown(const std::string &path);
+    void trackGains(int track, float &gl, float &gr) const;
+    // linear-interpolated read of one track at a fractional frame
+    void readAt(const Track &tr, double p, float &l, float &r) const;
     void recomputePeaks(int track, size_t chunk, const Sample *data);
     size_t recOffset() const;
     void flushRecord(int track, size_t end);
