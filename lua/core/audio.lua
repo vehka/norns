@@ -612,6 +612,72 @@ function Audio.file_info(path)
 end
 
 
+
+--- multitape: a 4-track RAM tape (OP-1 style).
+-- tracks are 1-4; times are in seconds; levels are amplitudes.
+-- @section multitape
+Audio.multitape = {}
+local MT = Audio.multitape
+
+MT.TRACKS = 4
+MT.SOURCES = {"input", "engine", "softcut", "all"}
+--- folder for saved 4-track projects.
+function MT.dir() return _path.audio .. "multitape/" end
+
+function MT.play() _norns.mtape_play(true) end
+function MT.stop() _norns.mtape_play(false) end
+function MT.seek(sec) _norns.mtape_seek(math.max(0, sec)) end
+--- arm a track for recording; 0 or nil disarms.
+function MT.arm(track) _norns.mtape_arm(track or 0) end
+--- enable/disable recording on the armed track (punch in/out while playing).
+function MT.rec(on) _norns.mtape_rec(on and true or false) end
+function MT.track_level(track, amp) _norns.mtape_track_level(track, amp) end
+function MT.track_pan(track, pan) _norns.mtape_track_pan(track, pan) end
+function MT.track_mute(track, mute) _norns.mtape_track_mute(track, mute and true or false) end
+--- record source: 1 input, 2 engine, 3 softcut, 4 all.
+function MT.source(index) _norns.mtape_source(index) end
+function MT.level(amp) _norns.mtape_level(amp) end
+function MT.level_rev(amp) _norns.mtape_level_rev(amp) end
+--- load an audio file onto a track at a position (default 0).
+function MT.load(track, path, sec) _norns.mtape_load(track, path, sec or 0) end
+--- erase a track.
+function MT.clear(track) _norns.mtape_clear(track) end
+--- save all tracks as track1.wav..track4.wav into dust/audio/multitape/<name>/.
+function MT.save(name)
+  util.make_dir(MT.dir())
+  _norns.mtape_save(MT.dir() .. name)
+  return MT.dir() .. name
+end
+--- load a saved project folder back onto the tracks (missing tracks are cleared).
+function MT.open(name)
+  local dir = MT.dir() .. name .. "/"
+  for t = 1, MT.TRACKS do
+    MT.clear(t)
+    local path = dir .. "track" .. t .. ".wav"
+    if util.file_exists(path) then MT.load(t, path, 0) end
+  end
+end
+--- current state: playing, recording, armed (0 = none), source, channels,
+-- pos, max, ends (per-track content end), mem (bytes), mem_full, busy, dropped.
+function MT.status() return _norns.mtape_status() end
+--- peaks (0-1) for n bins of bin_sec seconds starting at start_sec.
+function MT.overview(track, start_sec, bin_sec, n)
+  return _norns.mtape_overview(track, math.max(0, start_sec), bin_sec, n)
+end
+
+--- push saved system state to the engine (startup).
+function MT.restore()
+  local st = norns.state.mtape
+  MT.level(util.dbamp(st.level))
+  MT.level_rev(util.dbamp(st.rev))
+  MT.source(st.source)
+  for t = 1, MT.TRACKS do
+    MT.track_level(t, util.dbamp(st.track_level[t]))
+    MT.track_pan(t, st.track_pan[t])
+    MT.track_mute(t, st.track_mute[t] == 1)
+  end
+end
+
 function Audio.add_params()
   params:add_group("LEVELS",9)
   params:add_control("output_level", "output", 
@@ -895,6 +961,53 @@ function Audio.add_params()
       audio.level_tape_cut(util.dbamp(x))
       norns.state.mix.cut_input_tape = x
     end)
+
+
+  -- multitape (system state; not saved in script PSETs)
+  local mst = norns.state.mtape
+  params:add_group("MULTITAPE", 3 + 3 * MT.TRACKS)
+  params:add_control("mtape_level", "level",
+    cs.new(-math.huge,6,'db',0,mst.level,"dB"))
+  params:set_action("mtape_level", function(x)
+    MT.level(util.dbamp(x))
+    mst.level = x
+  end)
+  params:set_save("mtape_level", false)
+  params:add_control("mtape_rev", "reverb send",
+    cs.new(-math.huge,18,'db',0,mst.rev,"dB"))
+  params:set_action("mtape_rev", function(x)
+    MT.level_rev(util.dbamp(x))
+    mst.rev = x
+  end)
+  params:set_save("mtape_rev", false)
+  params:add_option("mtape_source", "record source", MT.SOURCES, mst.source)
+  params:set_action("mtape_source", function(x)
+    MT.source(x)
+    mst.source = x
+  end)
+  params:set_save("mtape_source", false)
+  for t = 1, MT.TRACKS do
+    params:add_control("mtape_level_"..t, "track "..t.." level",
+      cs.new(-math.huge,6,'db',0,mst.track_level[t],"dB"))
+    params:set_action("mtape_level_"..t, function(x)
+      MT.track_level(t, util.dbamp(x))
+      mst.track_level[t] = x
+    end)
+    params:set_save("mtape_level_"..t, false)
+    params:add_control("mtape_pan_"..t, "track "..t.." pan",
+      cs.new(-1,1,'lin',0,mst.track_pan[t],""))
+    params:set_action("mtape_pan_"..t, function(x)
+      MT.track_pan(t, x)
+      mst.track_pan[t] = x
+    end)
+    params:set_save("mtape_pan_"..t, false)
+    params:add_binary("mtape_mute_"..t, "track "..t.." mute", "toggle", mst.track_mute[t])
+    params:set_action("mtape_mute_"..t, function(x)
+      MT.track_mute(t, x == 1)
+      mst.track_mute[t] = x
+    end)
+    params:set_save("mtape_mute_"..t, false)
+  end
 
 end
 

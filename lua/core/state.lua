@@ -45,6 +45,15 @@ state.mix.cut_input_adc = 0
 state.mix.cut_input_eng = 0
 state.mix.cut_input_tape = -math.huge
 
+-- multitape (levels in dB)
+state.mtape = {}
+state.mtape.level = 0
+state.mtape.rev = -math.huge
+state.mtape.source = 1
+state.mtape.track_level = {0, 0, 0, 0}
+state.mtape.track_pan = {0, 0, 0, 0}
+state.mtape.track_mute = {0, 0, 0, 0}
+
 state.clock = {}
 state.clock.source = 1
 state.clock.tempo = 90
@@ -145,6 +154,19 @@ state.save_state = function()
   io.write("norns.state.mix.cut_input_adc = " .. norns.state.mix.cut_input_adc .. "\n")
   io.write("norns.state.mix.cut_input_eng = " .. norns.state.mix.cut_input_eng .. "\n")
   io.write("norns.state.mix.cut_input_tape = " .. norns.state.mix.cut_input_tape .. "\n")
+  -- create the tables first, so builds without multitape can still read this file
+  io.write("norns.state.mtape = norns.state.mtape or {}\n")
+  io.write("norns.state.mtape.track_level = norns.state.mtape.track_level or {}\n")
+  io.write("norns.state.mtape.track_pan = norns.state.mtape.track_pan or {}\n")
+  io.write("norns.state.mtape.track_mute = norns.state.mtape.track_mute or {}\n")
+  io.write("norns.state.mtape.level = " .. norns.state.mtape.level .. "\n")
+  io.write("norns.state.mtape.rev = " .. norns.state.mtape.rev .. "\n")
+  io.write("norns.state.mtape.source = " .. norns.state.mtape.source .. "\n")
+  for i = 1,4 do
+    io.write("norns.state.mtape.track_level["..i.."] = " .. norns.state.mtape.track_level[i] .. "\n")
+    io.write("norns.state.mtape.track_pan["..i.."] = " .. norns.state.mtape.track_pan[i] .. "\n")
+    io.write("norns.state.mtape.track_mute["..i.."] = " .. norns.state.mtape.track_mute[i] .. "\n")
+  end
   io.write("norns.state.clock.source = " .. norns.state.clock.source .. "\n")
   io.write("norns.state.clock.tempo = " .. norns.state.clock.tempo .. "\n")
   io.write("norns.state.clock.link_quantum = " .. norns.state.clock.link_quantum .. "\n")

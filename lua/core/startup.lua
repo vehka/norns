@@ -85,6 +85,8 @@ _norns.startup_status.ok = function()
   _norns.poll_start_vu()
   -- start tape state polling
   _norns.poll_start_tape()
+  -- apply saved multitape mix
+  audio.multitape.restore()
   -- report engines
   _norns.report_engines()
   wifi.init()
