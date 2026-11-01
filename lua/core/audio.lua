@@ -657,8 +657,33 @@ function MT.open(name)
     if util.file_exists(path) then MT.load(t, path, 0) end
   end
 end
+--- playback rate (1 normal, 2 double, -1 reverse...); the tape glides there.
+-- recording only happens at rate 1.
+function MT.rate(r) _norns.mtape_rate(r) end
+--- glide time for rate changes, in seconds.
+function MT.rate_slew(sec) _norns.mtape_rate_slew(sec) end
+function MT.loop(on) _norns.mtape_loop(on and true or false) end
+function MT.loop_points(start_sec, end_sec)
+  _norns.mtape_loop_points(math.max(0, start_sec), math.max(0, end_sec))
+end
+--- render all tracks (with level/pan/mute) to dust/audio/multitape/<name>.wav.
+function MT.mixdown(name)
+  util.make_dir(MT.dir())
+  local path = MT.dir() .. name .. ".wav"
+  _norns.mtape_mixdown(path)
+  return path
+end
+--- seconds per beat at the current clock tempo.
+function MT.beat_sec() return clock.get_beat_sec() end
+--- snap a time to the beat grid when the grid param is on.
+function MT.snap(sec)
+  if norns.state.mtape.grid ~= 2 then return sec end
+  local beat = MT.beat_sec()
+  return math.floor(sec / beat + 0.5) * beat
+end
 --- current state: playing, recording, armed (0 = none), source, channels,
--- pos, max, ends (per-track content end), mem (bytes), mem_full, busy, dropped.
+-- pos, max, ends (per-track content end), mem (bytes), mem_full, busy, dropped,
+-- rate, loop, loop_start, loop_end.
 function MT.status() return _norns.mtape_status() end
 --- peaks (0-1) for n bins of bin_sec seconds starting at start_sec.
 function MT.overview(track, start_sec, bin_sec, n)
@@ -671,6 +696,8 @@ function MT.restore()
   MT.level(util.dbamp(st.level))
   MT.level_rev(util.dbamp(st.rev))
   MT.source(st.source)
+  MT.loop_points(st.loop_start, st.loop_end)
+  MT.loop(st.loop == 1)
   for t = 1, MT.TRACKS do
     MT.track_level(t, util.dbamp(st.track_level[t]))
     MT.track_pan(t, st.track_pan[t])
@@ -965,7 +992,7 @@ function Audio.add_params()
 
   -- multitape (system state; not saved in script PSETs)
   local mst = norns.state.mtape
-  params:add_group("MULTITAPE", 3 + 3 * MT.TRACKS)
+  params:add_group("MULTITAPE", 8 + 3 * MT.TRACKS)
   params:add_control("mtape_level", "level",
     cs.new(-math.huge,6,'db',0,mst.level,"dB"))
   params:set_action("mtape_level", function(x)
@@ -986,6 +1013,31 @@ function Audio.add_params()
     mst.source = x
   end)
   params:set_save("mtape_source", false)
+  params:add_binary("mtape_loop", "loop", "toggle", mst.loop)
+  params:set_action("mtape_loop", function(x)
+    MT.loop(x == 1)
+    mst.loop = x
+  end)
+  params:set_save("mtape_loop", false)
+  local cs_loop = function(default) return cs.new(0, 360, 'lin', 0, default, "s", 0.05 / 360) end
+  params:add_control("mtape_loop_start", "loop start", cs_loop(mst.loop_start))
+  params:set_action("mtape_loop_start", function(x)
+    mst.loop_start = x
+    MT.loop_points(mst.loop_start, mst.loop_end)
+  end)
+  params:set_save("mtape_loop_start", false)
+  params:add_control("mtape_loop_end", "loop end", cs_loop(mst.loop_end))
+  params:set_action("mtape_loop_end", function(x)
+    mst.loop_end = x
+    MT.loop_points(mst.loop_start, mst.loop_end)
+  end)
+  params:set_save("mtape_loop_end", false)
+  params:add_option("mtape_grid", "tempo grid", {"off", "on"}, mst.grid)
+  params:set_action("mtape_grid", function(x) mst.grid = x end)
+  params:set_save("mtape_grid", false)
+  params:add_number("mtape_bar", "beats per bar", 1, 16, mst.bar)
+  params:set_action("mtape_bar", function(x) mst.bar = x end)
+  params:set_save("mtape_bar", false)
   for t = 1, MT.TRACKS do
     params:add_control("mtape_level_"..t, "track "..t.." level",
       cs.new(-math.huge,6,'db',0,mst.track_level[t],"dB"))

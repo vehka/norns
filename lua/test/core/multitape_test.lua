@@ -16,6 +16,11 @@ local function setup_env(opts)
         track_level = {0, -6, 0, 0},
         track_pan = {0, 0.5, 0, -1},
         track_mute = {0, 0, 1, 0},
+        loop = 1,
+        loop_start = 1.5,
+        loop_end = 3,
+        grid = opts.grid or 1,
+        bar = 4,
       },
     },
   }
@@ -33,11 +38,13 @@ local function setup_env(opts)
     'mtape_play', 'mtape_seek', 'mtape_arm', 'mtape_rec', 'mtape_track_level',
     'mtape_track_pan', 'mtape_track_mute', 'mtape_source', 'mtape_level',
     'mtape_level_rev', 'mtape_load', 'mtape_save', 'mtape_clear', 'mtape_status',
-    'mtape_overview',
+    'mtape_overview', 'mtape_rate', 'mtape_rate_slew', 'mtape_loop',
+    'mtape_loop_points', 'mtape_mixdown',
   }) do
     _norns[name] = mock.spy()
   end
 
+  clock = { get_beat_sec = function() return 0.5 end }
   package.loaded['controlspec'] = { new = function() return {} end }
   package.loaded['core/audio'] = nil
   local audio = require('core/audio')
@@ -79,6 +86,25 @@ function TestMultitape.test_restore_pushes_saved_state()
   luaunit.assertEquals(_norns.mtape_track_pan.args(2)[2], 0.5)
   luaunit.assertEquals(_norns.mtape_track_mute.args(3)[2], true)
   luaunit.assertEquals(_norns.mtape_track_mute.args(1)[2], false)
+  luaunit.assertEquals(_norns.mtape_loop_points.args(1)[1], 1.5)
+  luaunit.assertEquals(_norns.mtape_loop_points.args(1)[2], 3)
+  luaunit.assertEquals(_norns.mtape_loop.args(1)[1], true)
+end
+
+function TestMultitape.test_mixdown_path()
+  setup_env()
+  local MT = require('core/audio').multitape
+  luaunit.assertEquals(MT.mixdown('take'), '/dust/audio/multitape/take.wav')
+  luaunit.assertEquals(_norns.mtape_mixdown.args(1)[1], '/dust/audio/multitape/take.wav')
+end
+
+function TestMultitape.test_snap_follows_grid_param()
+  local env = setup_env({ grid = 1 })
+  luaunit.assertEquals(env.audio.multitape.snap(1.3), 1.3)
+  env = setup_env({ grid = 2 })
+  -- 0.5 s beats
+  luaunit.assertEquals(env.audio.multitape.snap(1.3), 1.5)
+  luaunit.assertEquals(env.audio.multitape.snap(1.2), 1.0)
 end
 
 function TestMultitape.test_save_uses_audio_folder()
