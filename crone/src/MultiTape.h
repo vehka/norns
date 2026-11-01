@@ -90,6 +90,9 @@ class MultiTape {
     //--- any thread
     void setLatency(size_t captureFrames, size_t playbackFrames);
     Status getStatus() const;
+    int getSource() const {
+        return source.load(std::memory_order_relaxed);
+    }
     // max peak (0-255) per bin, for bins of binFrames starting at startFrame
     void overview(int track, size_t startFrame, size_t binFrames, int numBins, uint8_t *out) const;
 

@@ -92,6 +92,18 @@ class Commands {
         SET_CUT_RATE_SLEW_TIME,
         SET_CUT_VOICE_SYNC,
         SET_CUT_BUFFER,
+
+        //-- multitape commands
+        SET_LEVEL_MTAPE,
+        SET_LEVEL_MTAPE_AUX,
+        MTAPE_PLAY,        // value: 0/1
+        MTAPE_SEEK,        // idx_0: frame
+        MTAPE_ARM,         // idx_0: track, -1 = none
+        MTAPE_REC,         // value: 0/1
+        MTAPE_TRACK_LEVEL, // idx_0: track, value: amp
+        MTAPE_TRACK_PAN,   // idx_0: track, value: -1..1
+        MTAPE_TRACK_MUTE,  // idx_0: track, value: 0/1
+        MTAPE_SOURCE,      // idx_0: MultiTape::Source
         NUM_COMMANDS,
     } Id;
 

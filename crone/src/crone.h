@@ -411,6 +411,25 @@ void crone_tape_play_loop(int enabled);
 void crone_tape_pause();
 void crone_tape_resume();
 
+//--- multitape
+// tracks are 0-based here; times in seconds
+void crone_mtape_play(int on);
+void crone_mtape_seek(float sec);
+void crone_mtape_arm(int track);
+void crone_mtape_rec(int on);
+void crone_mtape_track_level(int track, float amp);
+void crone_mtape_track_pan(int track, float pan);
+void crone_mtape_track_mute(int track, int mute);
+void crone_mtape_source(int source);
+void crone_mtape_level(float amp);
+void crone_mtape_level_rev(float amp);
+void crone_mtape_load(int track, const char *path, float sec);
+void crone_mtape_save(const char *dir);
+void crone_mtape_clear(int track);
+crone::MultiTape::Status crone_mtape_status();
+// peak (0-255) per bin for numBins bins of binSec starting at startSec
+void crone_mtape_overview(int track, float startSec, float binSec, int numBins, uint8_t *out);
+
 inline void crone_set_level_tape(float arg0) {
     crone::Commands::mixerCommands.post(crone::Commands::Id::SET_LEVEL_TAPE,
                                         arg0);

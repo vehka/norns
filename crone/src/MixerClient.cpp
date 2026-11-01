@@ -95,6 +95,32 @@ void MixerClient::process(jack_nframes_t numFrames) {
     bus.cut_sink.mixFrom(bus.ext_source, numFrames, smoothLevels.ext_cut);
     bus.cut_sink.mixFrom(bus.tape, numFrames, smoothLevels.tape_cut);
 
+    // multitape: record source never includes tape or multitape playback
+    {
+        bus.mtape_src.clear(numFrames);
+        switch (mtape.getSource()) {
+        case MultiTape::SourceInput:
+            bus.mtape_src.addFrom(bus.adc_source, numFrames);
+            break;
+        case MultiTape::SourceEngine:
+            bus.mtape_src.addFrom(bus.ext_source, numFrames);
+            break;
+        case MultiTape::SourceSoftcut:
+            bus.mtape_src.addFrom(bus.cut_source, numFrames);
+            break;
+        default:
+            bus.mtape_src.addFrom(bus.adc_source, numFrames);
+            bus.mtape_src.addFrom(bus.ext_source, numFrames);
+            bus.mtape_src.addFrom(bus.cut_source, numFrames);
+            break;
+        }
+        bus.mtape.clear(numFrames);
+        const float *src[2] = {bus.mtape_src.buf[0], bus.mtape_src.buf[1]};
+        float *out[2] = {bus.mtape.buf[0], bus.mtape.buf[1]};
+        mtape.process(src, out, numFrames);
+        bus.ins_in.mixFrom(bus.mtape, numFrames, smoothLevels.mtape);
+    }
+
     processFx(numFrames);
 
     // perform  output
@@ -126,6 +152,7 @@ void MixerClient::process(jack_nframes_t numFrames) {
 void MixerClient::setSampleRate(jack_nframes_t sr) {
     smoothLevels.setSampleRate(sr);
     tape.setSampleRate(static_cast<float>(sr));
+    mtape.init(static_cast<float>(sr), MultiTape::defaultChannels());
     comp.init(sr);
     reverb.init(sr);
     setFxDefaults();
@@ -144,6 +171,7 @@ void MixerClient::processFx(size_t numFrames) {
         bus.aux_in.mixFrom(bus.cut_source, numFrames, smoothLevels.cut_aux);
         bus.aux_in.mixFrom(bus.ext_source, numFrames, smoothLevels.ext_aux);
         bus.aux_in.mixFrom(bus.tape, numFrames, smoothLevels.tape_aux);
+        bus.aux_in.mixFrom(bus.mtape, numFrames, smoothLevels.mtape_aux);
         pin[0] = bus.aux_in.buf[0];
         pin[1] = bus.aux_in.buf[1];
         pout[0] = bus.aux_out.buf[0];
@@ -238,6 +266,38 @@ void MixerClient::handleCommand(Commands::CommandPacket *p) {
     case Commands::Id::SET_LEVEL_CUT_AUX:
         smoothLevels.cut_aux.setTarget(p->value);
         break;
+
+        //-- multitape
+    case Commands::Id::SET_LEVEL_MTAPE:
+        smoothLevels.mtape.setTarget(p->value);
+        break;
+    case Commands::Id::SET_LEVEL_MTAPE_AUX:
+        smoothLevels.mtape_aux.setTarget(p->value);
+        break;
+    case Commands::Id::MTAPE_PLAY:
+        mtape.setPlaying(p->value > 0.f);
+        break;
+    case Commands::Id::MTAPE_SEEK:
+        mtape.seek(p->idx_0 > 0 ? static_cast<size_t>(p->idx_0) : 0);
+        break;
+    case Commands::Id::MTAPE_ARM:
+        mtape.setArmed(p->idx_0);
+        break;
+    case Commands::Id::MTAPE_REC:
+        mtape.setRecord(p->value > 0.f);
+        break;
+    case Commands::Id::MTAPE_TRACK_LEVEL:
+        mtape.setTrackLevel(p->idx_0, p->value);
+        break;
+    case Commands::Id::MTAPE_TRACK_PAN:
+        mtape.setTrackPan(p->idx_0, p->value);
+        break;
+    case Commands::Id::MTAPE_TRACK_MUTE:
+        mtape.setTrackMute(p->idx_0, p->value > 0.f);
+        break;
+    case Commands::Id::MTAPE_SOURCE:
+        mtape.setSource(p->idx_0);
+        break;
     default:;
         ;
     }
@@ -257,6 +317,8 @@ MixerClient::BusList::BusList() {
     aux_out.clear();
     adc_monitor.clear();
     tape.clear();
+    mtape_src.clear();
+    mtape.clear();
 }
 
 MixerClient::SmoothLevelList::SmoothLevelList() {
@@ -273,6 +335,8 @@ MixerClient::SmoothLevelList::SmoothLevelList() {
     cut_aux.setTarget(0.f);
     ext_aux.setTarget(0.f);
     tape_aux.setTarget(0.f);
+    mtape.setTarget(1.f);
+    mtape_aux.setTarget(0.f);
     aux.setTarget(0.f);
     ins_mix.setTarget(0.f);
 }
@@ -291,6 +355,8 @@ void MixerClient::SmoothLevelList::setSampleRate(float sr) {
     cut_aux.setSampleRate(sr);
     ext_aux.setSampleRate(sr);
     tape_aux.setSampleRate(sr);
+    mtape.setSampleRate(sr);
+    mtape_aux.setSampleRate(sr);
     aux.setSampleRate(sr);
     ins_mix.setSampleRate(sr);
 }
@@ -318,4 +384,28 @@ void MixerClient::setFxDefaults() {
     reverb.getUi().setParamValue(ReverbParam::LOW_RT60, 4.7);
     reverb.getUi().setParamValue(ReverbParam::MID_RT60, 2.3);
     reverb.getUi().setParamValue(ReverbParam::HF_DAMP, 6666);
+}
+
+// latency of the first physical port in a direction, in frames
+static size_t physicalLatency(jack_client_t *client, unsigned long flags, jack_latency_callback_mode_t mode) {
+    const char **ports = jack_get_ports(client, nullptr, JACK_DEFAULT_AUDIO_TYPE, JackPortIsPhysical | flags);
+    if (ports == nullptr) {
+        return 0;
+    }
+    size_t frames = 0;
+    if (ports[0] != nullptr) {
+        jack_latency_range_t range{};
+        jack_port_get_latency_range(jack_port_by_name(client, ports[0]), mode, &range);
+        frames = range.max;
+    }
+    jack_free(ports);
+    return frames;
+}
+
+void MixerClient::updateMultiTapeLatency() {
+    // physical outputs are capture ports; physical inputs are playback ports
+    size_t capture = physicalLatency(client, JackPortIsOutput, JackCaptureLatency);
+    size_t playback = physicalLatency(client, JackPortIsInput, JackPlaybackLatency);
+    mtape.setLatency(capture, playback);
+    std::cout << "multitape: latency capture " << capture << ", playback " << playback << " frames" << std::endl;
 }

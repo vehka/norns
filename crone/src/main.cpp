@@ -57,6 +57,7 @@ int crone_main() {
     m->connectDacPorts();
     m->connect<2, 2>(sc.get(), MixerClient::SinkCut, SoftcutClient::SourceAdc);
     sc->connect<6, 6>(m.get(), 0, MixerClient::SourceCut);
+    m->updateMultiTapeLatency();
 
     cout << "starting OSC interface..." << endl;
     OscInterface::init(m.get(), sc.get());

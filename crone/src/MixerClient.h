@@ -10,6 +10,7 @@
 #include "Bus.h"
 #include "Client.h"
 #include "CronePoll.h"
+#include "MultiTape.h"
 #include "PeakMeter.h"
 #include "Tape.h"
 #include "Utilities.h"
@@ -59,6 +60,7 @@ class MixerClient : public Client<6, 6> {
     StereoCompressor comp;
     ZitaReverb reverb;
     Tape<2> tape;
+    MultiTape mtape;
 
     // busses
     struct BusList {
@@ -79,6 +81,9 @@ class MixerClient : public Client<6, 6> {
         StereoBus adc_monitor;
         // tape playback
         StereoBus tape;
+        // multitape record source and playback
+        StereoBus mtape_src;
+        StereoBus mtape;
         BusList();
     };
     BusList bus;
@@ -102,6 +107,8 @@ class MixerClient : public Client<6, 6> {
         LogRamp cut_aux;
         LogRamp ext_aux;
         LogRamp tape_aux;
+        LogRamp mtape;
+        LogRamp mtape_aux;
         // FX return / mix levels
         LogRamp aux;
         LogRamp ins_mix;
@@ -169,6 +176,13 @@ class MixerClient : public Client<6, 6> {
     void stopTapePlayback() {
         tape.reader.stop();
     }
+
+    MultiTape &getMultiTape() {
+        return mtape;
+    }
+
+    // measure physical port latency for multitape record offset (call after connecting)
+    void updateMultiTapeLatency();
 
     Poll *getVuPoll() {
         return vuPoll.get();

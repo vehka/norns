@@ -56,6 +56,7 @@ def build(bld):
         '../crone/src/BufDiskWorker.cpp',
         '../crone/src/Commands.cpp',
         '../crone/src/MixerClient.cpp',
+        '../crone/src/MultiTape.cpp',
         '../crone/src/OscInterface.cpp',
         '../crone/src/SoftcutClient.cpp',
         '../crone/src/Taper.cpp',

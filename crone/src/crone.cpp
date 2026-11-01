@@ -3,6 +3,8 @@
 #include "SoftcutClient.h"
 #include "oracle.h"
 
+#include <algorithm>
+
 static crone::MixerClient *mixerClient;
 static crone::SoftcutClient *softcutClient;
 
@@ -178,4 +180,73 @@ void crone_tape_pause() {
 void crone_tape_resume() {
     mixerClient->pauseTapeRecord(0);
     mixerClient->pauseTapePlayback(0);
+}
+
+//--- multitape
+
+static size_t mtape_frames(float sec) {
+    const float sr = mixerClient->getMultiTape().getStatus().sampleRate;
+    return sec > 0.f ? static_cast<size_t>(sec * sr + 0.5f) : 0;
+}
+
+void crone_mtape_play(int on) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_PLAY, on ? 1.f : 0.f);
+}
+
+void crone_mtape_seek(float sec) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_SEEK,
+                                        static_cast<int>(mtape_frames(sec)), 0);
+}
+
+void crone_mtape_arm(int track) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_ARM, track, 0);
+}
+
+void crone_mtape_rec(int on) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_REC, on ? 1.f : 0.f);
+}
+
+void crone_mtape_track_level(int track, float amp) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_TRACK_LEVEL, track, amp);
+}
+
+void crone_mtape_track_pan(int track, float pan) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_TRACK_PAN, track, pan);
+}
+
+void crone_mtape_track_mute(int track, int mute) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_TRACK_MUTE, track, mute ? 1.f : 0.f);
+}
+
+void crone_mtape_source(int source) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_SOURCE, source, 0);
+}
+
+void crone_mtape_level(float amp) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::SET_LEVEL_MTAPE, amp);
+}
+
+void crone_mtape_level_rev(float amp) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::SET_LEVEL_MTAPE_AUX, amp);
+}
+
+void crone_mtape_load(int track, const char *path, float sec) {
+    mixerClient->getMultiTape().requestLoad(track, path, mtape_frames(sec));
+}
+
+void crone_mtape_save(const char *dir) {
+    mixerClient->getMultiTape().requestSave(dir);
+}
+
+void crone_mtape_clear(int track) {
+    mixerClient->getMultiTape().requestClear(track);
+}
+
+crone::MultiTape::Status crone_mtape_status() {
+    return mixerClient->getMultiTape().getStatus();
+}
+
+void crone_mtape_overview(int track, float startSec, float binSec, int numBins, uint8_t *out) {
+    mixerClient->getMultiTape().overview(track, mtape_frames(startSec),
+                                         std::max<size_t>(1, mtape_frames(binSec)), numBins, out);
 }
