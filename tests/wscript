@@ -743,6 +743,9 @@ def test(bld: BuildContext):
     DESKTOP_TEST_DIRS = {"matron/screen_sdl"}
     DESKTOP_TEST_USELIBS = ["SDL2", "CAIRO", "CAIRO-FT", "LUA53"]
 
+    # extra system libs needed by a test dir's mapped sources
+    EXTRA_TEST_LIBS = {"crone": ["sndfile"]}
+
     # collect test units
     test_units: List[TestUnit] = []
     for test_dir, test_source_files in sorted(test_dirs.items()):
@@ -785,7 +788,7 @@ def test(bld: BuildContext):
             cflags=build_config.cflags,
             cxxflags=build_config.cxxflags,
             defines=build_config.defines,
-            lib=link_libs,
+            lib=link_libs + EXTRA_TEST_LIBS.get(test_dir, []),
         )
 
     # store test units for validation hook
