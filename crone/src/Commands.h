@@ -106,6 +106,9 @@ class Commands {
         MTAPE_SOURCE,      // idx_0: MultiTape::Source
         MTAPE_RATE,        // value: playback rate target
         MTAPE_RATE_SLEW,   // value: seconds
+        MTAPE_JOG,         // value: 0/1
+        MTAPE_NUDGE,       // value: rate delta
+        MTAPE_JOG_STOP,    // value: seconds
         NUM_COMMANDS,
     } Id;
 

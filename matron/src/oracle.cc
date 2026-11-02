@@ -587,6 +587,18 @@ void o_mtape_rate_slew(float sec) {
     crone_mtape_rate_slew(sec);
 }
 
+void o_mtape_jog(int on) {
+    crone_mtape_jog(on);
+}
+
+void o_mtape_nudge(float rate_delta) {
+    crone_mtape_nudge(rate_delta);
+}
+
+void o_mtape_jog_stop(float sec) {
+    crone_mtape_jog_stop(sec);
+}
+
 void o_mtape_loop(int on) {
     crone_mtape_loop(on);
 }
@@ -617,6 +629,7 @@ void o_mtape_status(struct o_mtape_status *out) {
     out->jobs_pending = s.jobsPending;
     out->dropped = s.droppedBlocks;
     out->rate = s.rate;
+    out->jog = s.jog;
     out->loop = s.loop;
     out->loop_start_s = static_cast<float>(s.loopStart) / sr;
     out->loop_end_s = static_cast<float>(s.loopEnd) / sr;

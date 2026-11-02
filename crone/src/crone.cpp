@@ -270,3 +270,15 @@ void crone_mtape_loop_points(float startSec, float endSec) {
 void crone_mtape_mixdown(const char *path) {
     mixerClient->getMultiTape().requestMixdown(path);
 }
+
+void crone_mtape_jog(int on) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_JOG, on ? 1.f : 0.f);
+}
+
+void crone_mtape_nudge(float rateDelta) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_NUDGE, rateDelta);
+}
+
+void crone_mtape_jog_stop(float sec) {
+    crone::Commands::mixerCommands.post(crone::Commands::Id::MTAPE_JOG_STOP, sec);
+}

@@ -304,6 +304,15 @@ void MixerClient::handleCommand(Commands::CommandPacket *p) {
     case Commands::Id::MTAPE_RATE_SLEW:
         mtape.setRateSlew(p->value);
         break;
+    case Commands::Id::MTAPE_JOG:
+        mtape.setJog(p->value > 0.f);
+        break;
+    case Commands::Id::MTAPE_NUDGE:
+        mtape.nudge(p->value);
+        break;
+    case Commands::Id::MTAPE_JOG_STOP:
+        mtape.setJogStopTime(p->value);
+        break;
     default:;
         ;
     }

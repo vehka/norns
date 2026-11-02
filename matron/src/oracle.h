@@ -160,6 +160,7 @@ struct o_mtape_status {
     int jobs_pending;
     int dropped;
     float rate;
+    int jog;
     int loop;
     float loop_start_s;
     float loop_end_s;
@@ -179,6 +180,9 @@ extern void o_mtape_save(const char *dir);
 extern void o_mtape_clear(int track);
 extern void o_mtape_rate(float rate);
 extern void o_mtape_rate_slew(float sec);
+extern void o_mtape_jog(int on);
+extern void o_mtape_nudge(float rate_delta);
+extern void o_mtape_jog_stop(float sec);
 extern void o_mtape_loop(int on);
 extern void o_mtape_loop_points(float start_s, float end_s);
 extern void o_mtape_mixdown(const char *path);
