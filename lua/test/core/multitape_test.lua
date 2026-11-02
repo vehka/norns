@@ -21,6 +21,9 @@ local function setup_env(opts)
         loop_end = 3,
         grid = opts.grid or 1,
         bar = 4,
+        jog_nudge = 2,
+        jog_accel = 3,
+        jog_stop = 0.5,
       },
     },
   }
@@ -28,6 +31,8 @@ local function setup_env(opts)
 
   local made = {}
   util = {
+    time = function() return opts.time or 100 end,
+    clamp = function(x, lo, hi) return math.min(hi, math.max(lo, x)) end,
     dbamp = function(db) return 10 ^ (db / 20) end,
     make_dir = function(p) made[#made + 1] = p end,
     file_exists = function(p) return opts.existing and opts.existing[p] or false end,
@@ -39,10 +44,11 @@ local function setup_env(opts)
     'mtape_track_pan', 'mtape_track_mute', 'mtape_source', 'mtape_level',
     'mtape_level_rev', 'mtape_load', 'mtape_save', 'mtape_clear', 'mtape_status',
     'mtape_overview', 'mtape_rate', 'mtape_rate_slew', 'mtape_loop',
-    'mtape_loop_points', 'mtape_mixdown',
+    'mtape_loop_points', 'mtape_mixdown', 'mtape_jog', 'mtape_nudge', 'mtape_jog_stop',
   }) do
     _norns[name] = mock.spy()
   end
+  _norns.mtape_status = mock.spy(function() return { playing = opts.playing or false } end)
 
   clock = { get_beat_sec = function() return 0.5 end }
   package.loaded['controlspec'] = { new = function() return {} end }
@@ -137,4 +143,51 @@ function TestMultitape.test_overview_clamps_start()
   local args = _norns.mtape_overview.args(1)
   luaunit.assertEquals(args[2], 0)
   luaunit.assertEquals(args[4], 64)
+end
+
+function TestMultitape.test_jog_turn_enters_jog_and_pushes()
+  local env = setup_env({ playing = true })
+  local MT = env.audio.multitape
+  MT.jog_turn(1)
+  luaunit.assertTrue(MT.jogging())
+  luaunit.assertEquals(_norns.mtape_rate.args(1)[1], 0)
+  luaunit.assertEquals(_norns.mtape_jog.args(1)[1], true)
+  luaunit.assertEquals(_norns.mtape_play.args(1)[1], true)
+  luaunit.assertEquals(_norns.mtape_jog_stop.args(1)[1], 0.5)
+  -- a lone tick gets no speed boost: push = 2 ms / 0.5 s
+  local push = (2 / 1000) / 0.5
+  luaunit.assertAlmostEquals(_norns.mtape_nudge.args(1)[1], push, 1e-9)
+end
+
+function TestMultitape.test_jog_close_ticks_dont_spike()
+  local env = setup_env({ playing = true })
+  local MT = env.audio.multitape
+  -- two ticks at the same instant (util.time is constant here)
+  MT.jog_turn(1)
+  MT.jog_turn(1)
+  local second = _norns.mtape_nudge.args(2)[1]
+  local lone = (2 / 1000) / 0.5
+  luaunit.assertTrue(second > lone)
+  luaunit.assertTrue(second < lone * 5)
+end
+
+function TestMultitape.test_jog_end_restores_playback()
+  local env = setup_env({ playing = true })
+  local MT = env.audio.multitape
+  MT.jog_turn(-2)
+  MT.jog_end()
+  luaunit.assertFalse(MT.jogging())
+  luaunit.assertEquals(_norns.mtape_jog.args(2)[1], false)
+  luaunit.assertEquals(_norns.mtape_rate.args(2)[1], 1)
+  -- was playing before the jog: keeps playing
+  luaunit.assertEquals(_norns.mtape_play.args(2)[1], true)
+end
+
+function TestMultitape.test_stop_leaves_jog()
+  local env = setup_env({ playing = false })
+  local MT = env.audio.multitape
+  MT.jog_turn(1)
+  MT.stop()
+  luaunit.assertFalse(MT.jogging())
+  luaunit.assertEquals(_norns.mtape_play.args(2)[1], false)
 end

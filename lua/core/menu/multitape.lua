@@ -4,7 +4,7 @@
 --
 -- E2 select track          K2 play / stop
 -- E3 jump (beats w/ grid)  K3 record-arm selected track (punch in/out while playing)
--- K1+E1 scrub: the tape moves only while the encoder turns (like the OP-1 encoder)
+-- K1+E1 scrub with inertia (PARAMS > MULTITAPE > scrub nudge / acceleration / stop time)
 -- K1+E2 zoom               K1+K2 back to loop start (or tape start)
 -- K1+E3 cue: hold K1 and turn for ff / rewind speed; release K1 to go back
 -- K1+K3 track / loop / project actions
@@ -23,10 +23,6 @@ local TICKS = {0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60}             -- seconds
 local BEAT_TICKS = {1/4, 1/2, 1, 2, 4, 8, 16, 32, 64}            -- beats
 local SHUTTLE = {-16, -8, -4, -2, -1, -0.5, 0.5, 1, 2, 4, 8, 16} -- rates
 local SHUTTLE_NORMAL = 8
-local SCRUB_PX = 2       -- tape movement per encoder tick, in screen pixels
-local SCRUB_IDLE = 0.08  -- seconds without turning before the head stops
-local SCRUB_SLEW = 0.02  -- rate glide while scrubbing
-local RATE_SLEW = 0.1    -- normal rate glide
 local MENU_E1_SENS = 8   -- menu.lua's E1 sensitivity, restored after scrubbing
 local FPS = 20
 
@@ -38,7 +34,7 @@ local m = {
   msg = nil,
   msg_until = 0,
   shuttle = nil, -- {idx, was_playing} while K1+E3 cues
-  scrub = nil,   -- {was_playing, last} while K1+E1 scrubs
+  scrub = false, -- true while K1+E1 scrubs
 }
 
 local function now() return util.time() end
@@ -64,6 +60,7 @@ end
 local function set_armed(track)
   MT.arm(track)
   MT.rec(track > 0)
+  params:set("mtape_arm", track + 1, true) -- keep the param in step, silently
 end
 
 local function end_shuttle()
@@ -74,39 +71,18 @@ local function end_shuttle()
 end
 
 local function scrub(d)
-  local s = m.status
-  local t = util.time()
   if not m.scrub then
-    m.scrub = {was_playing = s.playing, last = t - 0.05}
+    m.scrub = true
     norns.encoders.set_sens(1, 1)
-    MT.rate_slew(SCRUB_SLEW)
-    if not s.playing then
-      MT.rate(0)
-      MT.play()
-    end
   end
-  -- tape speed follows the turning speed
-  local dt = util.clamp(t - m.scrub.last, 0.01, 0.1)
-  m.scrub.last = t
-  local secs = d * SCRUB_PX * ZOOMS[m.zoom]
-  MT.rate(util.clamp(secs / dt, -16, 16))
-end
-
--- called from the redraw timer: stop the head when the encoder rests
-local function scrub_idle()
-  if m.scrub and m.scrub.last and util.time() - m.scrub.last > SCRUB_IDLE then
-    MT.rate(0)
-    m.scrub.last = nil
-  end
+  MT.jog_turn(d)
 end
 
 local function end_scrub()
   if not m.scrub then return end
-  MT.rate_slew(RATE_SLEW)
-  MT.rate(1)
-  if not m.scrub.was_playing then MT.stop() end
+  m.scrub = false
+  MT.jog_end()
   norns.encoders.set_sens(1, MENU_E1_SENS)
-  m.scrub = nil
 end
 
 local function modal(fn)
@@ -263,7 +239,6 @@ m.enc = function(n, d)
   if not m.status then return end
   if n == 1 then
     -- E1 alone changes menu screens; it only reaches us with K1 held
-    if m.scrub and m.scrub.last == nil then m.scrub.last = util.time() - 0.05 end
     scrub(d)
   elseif n == 2 then
     if _menu.alt then
@@ -305,7 +280,7 @@ local function draw_header(s)
   screen.text_center(m.track)
 
   local state
-  if m.scrub then state = "SCRUB"
+  if MT.jogging() then state = "SCRUB"
   elseif s.recording and s.rate == 1 then state = "REC"
   elseif s.playing and math.abs(s.rate - 1) > 0.01 then
     local r = math.abs(s.rate)
@@ -452,7 +427,6 @@ m.init = function()
   _menu.timer.count = -1
   _menu.timer.event = function()
     if m.modal then return end
-    scrub_idle()
     refresh_status()
     _menu.redraw()
   end

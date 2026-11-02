@@ -624,8 +624,61 @@ MT.SOURCES = {"input", "engine", "softcut", "all"}
 --- folder for saved 4-track projects.
 function MT.dir() return _path.audio .. "multitape/" end
 
-function MT.play() _norns.mtape_play(true) end
-function MT.stop() _norns.mtape_play(false) end
+-- jog (scrub with inertia) state; see MT.jog_turn
+local jog = {active = false, last = 0, speed = 0, was_playing = false}
+local JOG_SPEED_TIME = 0.1 -- seconds over which the turning speed is averaged
+local JOG_MAX_BOOST = 200
+
+--- leave jog mode; resume playback (true), stop (false) or restore (nil).
+function MT.jog_end(resume)
+  if not jog.active then return end
+  jog.active = false
+  _norns.mtape_jog(false)
+  _norns.mtape_rate(1)
+  local play = resume
+  if play == nil then play = jog.was_playing end
+  _norns.mtape_play(play)
+end
+
+function MT.play()
+  if jog.active then MT.jog_end(true) else _norns.mtape_play(true) end
+end
+function MT.stop()
+  if jog.active then MT.jog_end(false) else _norns.mtape_play(false) end
+end
+function MT.toggle()
+  if MT.status().playing and not jog.active then MT.stop() else MT.play() end
+end
+--- true while the tape is in jog mode.
+function MT.jogging() return jog.active end
+
+--- turn the jog wheel by d ticks. the tape gets a push that grows with
+-- the turning speed and coasts to rest (params: scrub nudge, acceleration,
+-- stop time). the first turn pauses playback; MT.play/MT.stop/MT.jog_end leave.
+function MT.jog_turn(d)
+  local st = norns.state.mtape
+  local t = util.time()
+  if not jog.active then
+    jog.active = true
+    jog.was_playing = MT.status().playing
+    jog.last = t - 1
+    jog.speed = 0
+    _norns.mtape_jog_stop(st.jog_stop)
+    _norns.mtape_rate(0)
+    _norns.mtape_jog(true)
+    _norns.mtape_play(true)
+  end
+  local dt = math.max(0, t - jog.last)
+  jog.last = t
+  -- turning speed in ticks per second, averaged so close ticks don't spike;
+  -- a lone tick reads as 1 / JOG_SPEED_TIME, which counts as no extra speed
+  jog.speed = jog.speed * math.exp(-dt / JOG_SPEED_TIME) + math.abs(d) / JOG_SPEED_TIME
+  local excess = math.max(0, jog.speed - 1 / JOG_SPEED_TIME)
+  -- one slow tick moves the tape by `nudge` ms; fast turning pushes harder
+  local push = (st.jog_nudge / 1000) / st.jog_stop
+  local boost = math.min(JOG_MAX_BOOST, 1 + st.jog_accel * (excess / 20) ^ 2)
+  _norns.mtape_nudge(d * push * boost)
+end
 function MT.seek(sec) _norns.mtape_seek(math.max(0, sec)) end
 --- arm a track for recording; 0 or nil disarms.
 function MT.arm(track) _norns.mtape_arm(track or 0) end
@@ -698,6 +751,7 @@ function MT.restore()
   MT.source(st.source)
   MT.loop_points(st.loop_start, st.loop_end)
   MT.loop(st.loop == 1)
+  _norns.mtape_jog_stop(st.jog_stop)
   for t = 1, MT.TRACKS do
     MT.track_level(t, util.dbamp(st.track_level[t]))
     MT.track_pan(t, st.track_pan[t])
@@ -992,7 +1046,47 @@ function Audio.add_params()
 
   -- multitape (system state; not saved in script PSETs)
   local mst = norns.state.mtape
-  params:add_group("MULTITAPE", 8 + 3 * MT.TRACKS)
+  params:add_group("MULTITAPE", 16 + 3 * MT.TRACKS)
+  -- transport (for MIDI mapping)
+  params:add_trigger("mtape_play_stop", "play / stop")
+  params:set_action("mtape_play_stop", function() MT.toggle() end)
+  params:add_trigger("mtape_to_start", "back to start")
+  params:set_action("mtape_to_start", function()
+    local s = MT.status()
+    MT.seek(s.loop and s.loop_start or 0)
+  end)
+  params:add_option("mtape_arm", "record arm", {"none", "1", "2", "3", "4"}, 1)
+  params:set_action("mtape_arm", function(x)
+    MT.arm(x - 1)
+    MT.rec(x > 1)
+  end)
+  params:set_save("mtape_arm", false)
+  params:add_control("mtape_speed", "cue speed", cs.new(-16, 16, 'lin', 0, 1, "x", 0.5 / 32))
+  params:set_action("mtape_speed", function(x) MT.rate(x) end)
+  params:set_save("mtape_speed", false)
+  local last_jog = 64
+  params:add_number("mtape_jog", "scrub (midi)", 0, 127, 64)
+  params:set_action("mtape_jog", function(x)
+    local d = x - last_jog
+    last_jog = x
+    if d ~= 0 then MT.jog_turn(d) end
+  end)
+  params:set_save("mtape_jog", false)
+  params:add_control("mtape_jog_nudge", "scrub nudge",
+    cs.new(0.5, 50, 'exp', 0, mst.jog_nudge, "ms"))
+  params:set_action("mtape_jog_nudge", function(x) mst.jog_nudge = x end)
+  params:set_save("mtape_jog_nudge", false)
+  params:add_control("mtape_jog_accel", "scrub acceleration",
+    cs.new(0, 10, 'lin', 0, mst.jog_accel, ""))
+  params:set_action("mtape_jog_accel", function(x) mst.jog_accel = x end)
+  params:set_save("mtape_jog_accel", false)
+  params:add_control("mtape_jog_stop", "scrub stop time",
+    cs.new(0.05, 3, 'exp', 0, mst.jog_stop, "s"))
+  params:set_action("mtape_jog_stop", function(x)
+    mst.jog_stop = x
+    _norns.mtape_jog_stop(x)
+  end)
+  params:set_save("mtape_jog_stop", false)
   params:add_control("mtape_level", "level",
     cs.new(-math.huge,6,'db',0,mst.level,"dB"))
   params:set_action("mtape_level", function(x)
