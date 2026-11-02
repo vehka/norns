@@ -57,6 +57,7 @@ class MultiTape {
         int jobsPending;
         int droppedBlocks; // record blocks lost to missing chunks
         float rate;        // current playback rate (1 = normal, <0 = reverse)
+        bool jog;
         bool loop;
         size_t loopStart;
         size_t loopEnd;
@@ -93,6 +94,10 @@ class MultiTape {
     // playback rate target; the rate glides there (ff/rev). recording only at 1
     void setRate(float rate);
     void setRateSlew(float seconds);
+    // jog (scrub with inertia): the rate follows nudges and decays to 0
+    void setJog(bool on);
+    void nudge(float rateDelta);
+    void setJogStopTime(float seconds);
     void setLoop(bool on);
     void setLoopPoints(size_t start, size_t end);
 
@@ -168,6 +173,8 @@ class MultiTape {
     float rate = 1.f;
     float rateTarget = 1.f;
     float rateCoef = 0.001f; // one-pole glide coefficient per frame
+    std::atomic<bool> jog{false};
+    float jogDecay = 0.99995f; // per-frame rate decay while jogging
     std::atomic<float> ratePublished{1.f};
     std::atomic<bool> loopOn{false};
     std::atomic<size_t> loopStart{0};

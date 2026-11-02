@@ -492,3 +492,51 @@ TEST_CASE("multitape mixes down tracks with level and pan") {
     CHECK(std::fabs(back[2 * 1000 + 1]) < 1e-4f);
     std::remove(path.c_str());
 }
+
+TEST_CASE("multitape jog nudges coast to rest") {
+    Rig r;
+    r.tape.seek(48000);
+    r.tape.setRate(0.f);
+    r.tape.setJog(true);
+    r.tape.setJogStopTime(0.1f);
+    r.tape.setPlaying(true);
+    // one nudge moves the tape by about rateDelta * stop time
+    r.tape.nudge(0.5f);
+    r.run(1000); // 64000 frames: ~13 time constants
+    const auto s = r.tape.getStatus();
+    CHECK(s.jog);
+    CHECK(s.rate == 0.f);
+    CHECK(s.playing);
+    const double moved = static_cast<double>(s.posFrame) - 48000.0;
+    CHECK(moved == doctest::Approx(0.5 * 0.1 * SR).epsilon(0.02));
+}
+
+TEST_CASE("multitape jog rests at the tape start instead of stopping") {
+    Rig r;
+    r.tape.seek(1000);
+    r.tape.setRate(0.f);
+    r.tape.setJog(true);
+    r.tape.setPlaying(true);
+    r.tape.nudge(-8.f);
+    r.run(50);
+    auto s = r.tape.getStatus();
+    CHECK(s.posFrame == 0);
+    CHECK(s.playing);
+    // still jogs forward from there
+    r.tape.nudge(2.f);
+    r.run(10);
+    CHECK(r.tape.getStatus().posFrame > 0);
+}
+
+TEST_CASE("multitape leaving jog glides back to the target rate") {
+    Rig r;
+    r.tape.setRate(0.f);
+    r.tape.setJog(true);
+    r.tape.setPlaying(true);
+    r.tape.nudge(3.f);
+    r.run(2);
+    r.tape.setJog(false);
+    r.tape.setRate(1.f);
+    r.run(1000);
+    CHECK(r.tape.getStatus().rate == 1.f);
+}

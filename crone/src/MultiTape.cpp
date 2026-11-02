@@ -113,6 +113,7 @@ void MultiTape::init(float sampleRate, int channels, bool startWorker) {
     chunkSamples = ChunkFrames * chans;
     fadeFrames = std::max<size_t>(1, static_cast<size_t>(0.005f * sr));
     setRateSlew(0.1f);
+    setJogStopTime(0.5f);
 
     for (auto &t : tracks) {
         t.chunks.reset(new std::atomic<Sample *>[numChunks]);
@@ -203,6 +204,20 @@ void MultiTape::setRateSlew(float seconds) {
     // time to cover ~63% of a rate change
     const float frames = std::max(1.f, seconds * sr);
     rateCoef = 1.f - std::exp(-1.f / frames);
+}
+
+void MultiTape::setJog(bool on) {
+    jog.store(on, std::memory_order_relaxed);
+}
+
+void MultiTape::nudge(float rateDelta) {
+    rate = std::max(-32.f, std::min(32.f, rate + rateDelta));
+}
+
+void MultiTape::setJogStopTime(float seconds) {
+    // time constant of the coast down: a nudge moves the tape by rateDelta * seconds
+    const float frames = std::max(1.f, seconds * sr);
+    jogDecay = std::exp(-1.f / frames);
 }
 
 void MultiTape::setLoop(bool on) {
@@ -298,6 +313,7 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
     const bool rec = recEnabled.load(std::memory_order_relaxed);
     const size_t offset = recOffset();
     const bool loop = loopOn.load(std::memory_order_relaxed);
+    const bool jogging = jog.load(std::memory_order_relaxed);
     const double ls = static_cast<double>(loopStart.load(std::memory_order_relaxed));
     const double le = static_cast<double>(loopEnd.load(std::memory_order_relaxed));
     const double len = le - ls;
@@ -336,7 +352,13 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
         }
 
         // rate glide; at normal speed the playhead lands back on whole frames
-        if (rate != rateTarget) {
+        if (jogging) {
+            // inertia: nudges push the tape, friction slows it down
+            rate *= jogDecay;
+            if (std::fabs(rate) < 1e-4f) {
+                rate = 0.f;
+            }
+        } else if (rate != rateTarget) {
             rate += (rateTarget - rate) * rateCoef;
             if (std::fabs(rateTarget - rate) < 0.005f) {
                 rate = rateTarget;
@@ -460,12 +482,21 @@ void MultiTape::process(const float *const src[2], float *const out[2], size_t n
                 phase += len;
             }
         }
+        // jogging rests against the tape ends; otherwise they stop the tape
         if (phase >= last) {
             phase = last;
-            stopPending = true;
+            if (jogging) {
+                rate = 0.f;
+            } else {
+                stopPending = true;
+            }
         } else if (phase < 0.0) {
             phase = 0.0;
-            stopPending = true;
+            if (jogging) {
+                rate = 0.f;
+            } else {
+                stopPending = true;
+            }
         }
     }
 
@@ -521,6 +552,7 @@ MultiTape::Status MultiTape::getStatus() const {
     s.jobsPending = jobsPending.load(std::memory_order_relaxed);
     s.droppedBlocks = droppedBlocks.load(std::memory_order_relaxed);
     s.rate = ratePublished.load(std::memory_order_relaxed);
+    s.jog = jog.load(std::memory_order_relaxed);
     s.loop = loopOn.load(std::memory_order_relaxed);
     s.loopStart = loopStart.load(std::memory_order_relaxed);
     s.loopEnd = loopEnd.load(std::memory_order_relaxed);
