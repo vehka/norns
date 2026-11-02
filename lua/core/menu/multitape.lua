@@ -3,9 +3,10 @@
 -- the playhead is fixed in the centre and the tape scrolls past it.
 --
 -- E2 select track          K2 play / stop
--- E3 scrub (beats w/ grid) K3 record-arm selected track (punch in/out while playing)
+-- E3 jump (beats w/ grid)  K3 record-arm selected track (punch in/out while playing)
+-- K1+E1 scrub: the tape moves only while the encoder turns (like the OP-1 encoder)
 -- K1+E2 zoom               K1+K2 back to loop start (or tape start)
--- K1+E3 shuttle: hold K1 and turn for ff / rewind; release K1 to go back
+-- K1+E3 cue: hold K1 and turn for ff / rewind speed; release K1 to go back
 -- K1+K3 track / loop / project actions
 
 local fileselect = require 'fileselect'
@@ -22,6 +23,11 @@ local TICKS = {0.1, 0.25, 0.5, 1, 2, 5, 10, 30, 60}             -- seconds
 local BEAT_TICKS = {1/4, 1/2, 1, 2, 4, 8, 16, 32, 64}            -- beats
 local SHUTTLE = {-16, -8, -4, -2, -1, -0.5, 0.5, 1, 2, 4, 8, 16} -- rates
 local SHUTTLE_NORMAL = 8
+local SCRUB_PX = 2       -- tape movement per encoder tick, in screen pixels
+local SCRUB_IDLE = 0.08  -- seconds without turning before the head stops
+local SCRUB_SLEW = 0.02  -- rate glide while scrubbing
+local RATE_SLEW = 0.1    -- normal rate glide
+local MENU_E1_SENS = 8   -- menu.lua's E1 sensitivity, restored after scrubbing
 local FPS = 20
 
 local m = {
@@ -31,7 +37,8 @@ local m = {
   modal = false,
   msg = nil,
   msg_until = 0,
-  shuttle = nil, -- {idx, was_playing} while K1+E3 shuttles
+  shuttle = nil, -- {idx, was_playing} while K1+E3 cues
+  scrub = nil,   -- {was_playing, last} while K1+E1 scrubs
 }
 
 local function now() return util.time() end
@@ -64,6 +71,42 @@ local function end_shuttle()
   MT.rate(1)
   if not m.shuttle.was_playing then MT.stop() end
   m.shuttle = nil
+end
+
+local function scrub(d)
+  local s = m.status
+  local t = util.time()
+  if not m.scrub then
+    m.scrub = {was_playing = s.playing, last = t - 0.05}
+    norns.encoders.set_sens(1, 1)
+    MT.rate_slew(SCRUB_SLEW)
+    if not s.playing then
+      MT.rate(0)
+      MT.play()
+    end
+  end
+  -- tape speed follows the turning speed
+  local dt = util.clamp(t - m.scrub.last, 0.01, 0.1)
+  m.scrub.last = t
+  local secs = d * SCRUB_PX * ZOOMS[m.zoom]
+  MT.rate(util.clamp(secs / dt, -16, 16))
+end
+
+-- called from the redraw timer: stop the head when the encoder rests
+local function scrub_idle()
+  if m.scrub and m.scrub.last and util.time() - m.scrub.last > SCRUB_IDLE then
+    MT.rate(0)
+    m.scrub.last = nil
+  end
+end
+
+local function end_scrub()
+  if not m.scrub then return end
+  MT.rate_slew(RATE_SLEW)
+  MT.rate(1)
+  if not m.scrub.was_playing then MT.stop() end
+  norns.encoders.set_sens(1, MENU_E1_SENS)
+  m.scrub = nil
 end
 
 local function modal(fn)
@@ -187,9 +230,10 @@ end
 
 m.key = function(n, z)
   if not m.status then return end
-  -- releasing K1 ends a shuttle
+  -- releasing K1 ends a cue or scrub
   if n == 1 and z == 0 then
     end_shuttle()
+    end_scrub()
     return
   end
   if z ~= 1 then return end
@@ -217,7 +261,11 @@ end
 
 m.enc = function(n, d)
   if not m.status then return end
-  if n == 2 then
+  if n == 1 then
+    -- E1 alone changes menu screens; it only reaches us with K1 held
+    if m.scrub and m.scrub.last == nil then m.scrub.last = util.time() - 0.05 end
+    scrub(d)
+  elseif n == 2 then
     if _menu.alt then
       m.zoom = util.clamp(m.zoom + d, 1, #ZOOMS)
     else
@@ -257,7 +305,8 @@ local function draw_header(s)
   screen.text_center(m.track)
 
   local state
-  if s.recording and s.rate == 1 then state = "REC"
+  if m.scrub then state = "SCRUB"
+  elseif s.recording and s.rate == 1 then state = "REC"
   elseif s.playing and math.abs(s.rate - 1) > 0.01 then
     local r = math.abs(s.rate)
     local fmt = r < 1 and "%s%.1fx" or "%s%dx"
@@ -396,11 +445,14 @@ m.redraw = function()
 end
 
 m.init = function()
+  -- a dialog left open by switching away from the menu never calls back
+  m.modal = false
   refresh_status()
   _menu.timer.time = 1 / FPS
   _menu.timer.count = -1
   _menu.timer.event = function()
     if m.modal then return end
+    scrub_idle()
     refresh_status()
     _menu.redraw()
   end
@@ -408,7 +460,9 @@ m.init = function()
 end
 
 m.deinit = function()
+  m.modal = false
   end_shuttle()
+  end_scrub()
   _menu.timer:stop()
 end
 
