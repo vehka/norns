@@ -345,20 +345,25 @@ const char *get_alsa_midi_node(struct udev_device *dev) {
     return result;
 }
 
-char *get_device_name(struct udev_device *dev) {
-    char *current_name = NULL;
-    struct udev_device *current_dev = dev;
-
-    while (current_name == NULL) {
-        current_name = (char *)udev_device_get_sysattr_value(current_dev, "product");
-        current_dev = udev_device_get_parent(current_dev);
-
-        if (current_dev == NULL) {
-            break;
+// value of the attribute on the device or its closest parent that has it
+static const char *find_sysattr_up(struct udev_device *dev, const char *attr) {
+    for (; dev != NULL; dev = udev_device_get_parent(dev)) {
+        const char *value = udev_device_get_sysattr_value(dev, attr);
+        if (value != NULL) {
+            return value;
         }
     }
+    return NULL;
+}
 
-    return strdup(current_name);
+char *get_device_name(struct udev_device *dev) {
+    // usb devices have a product name. bluetooth (uhid) and other virtual
+    // input devices have no usb parent, only the input device's own name
+    const char *name = find_sysattr_up(dev, "product");
+    if (name == NULL) {
+        name = find_sysattr_up(dev, "name");
+    }
+    return strdup(name != NULL ? name : "unknown");
 }
 
 int is_dev_monome_grid(struct udev_device *dev) {
