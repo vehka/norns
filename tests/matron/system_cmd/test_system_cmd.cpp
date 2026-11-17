@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+#include <unistd.h>
+
 #include "events.h"
 #include "system_cmd.h"
 
@@ -432,6 +434,8 @@ TEST_CASE("system_cmd: the async path keeps the default ceiling") {
     free_event(g_last_event);
 }
 
+// the hardware action table; desktop builds have their own (below)
+#ifndef NORNS_DESKTOP
 TEST_CASE("system_action: shutdown maps to the poweroff command and unit") {
     system_cmd_stubs_reset();
     REQUIRE(system_action("shutdown", 31));
@@ -470,6 +474,8 @@ TEST_CASE("system_action: update falls back to /home/we when HOME is unset") {
     CHECK(std::strcmp(g_last_cmd, "/bin/bash /home/we/norns/update/update.sh") == 0);
 }
 
+#endif
+
 TEST_CASE("system_action: unknown action is rejected without touching the transport") {
     system_cmd_stubs_reset();
     CHECK_FALSE(system_action("frobnicate", 35));
@@ -490,3 +496,35 @@ TEST_CASE("system_action: failed launch posts one event carrying the ref") {
     CHECK_FALSE(g_last_event->system_cmd_done.ok);
     free_done_event(g_last_event);
 }
+
+#ifdef NORNS_DESKTOP
+TEST_CASE("system_action (desktop): shutdown quits norns through the sidecar, no systemd-run") {
+    system_cmd_stubs_reset();
+    REQUIRE(system_action("shutdown", 30));
+    const std::string want = "kill -TERM " + std::to_string(getpid());
+    CHECK(std::string(g_last_cmd) == want);
+    CHECK(g_last_unit == nullptr);
+    CHECK(g_last_on_chunk == nullptr);
+
+    emit_done(SIDECAR_OK, nullptr);
+    REQUIRE(g_last_event != nullptr);
+    CHECK(g_last_event->system_cmd_done.cb_ref == 30);
+    CHECK(g_last_event->system_cmd_done.ok);
+    free_done_event(g_last_event);
+}
+
+TEST_CASE("system_action (desktop): reset flags a relaunch, then quits norns") {
+    system_cmd_stubs_reset();
+    REQUIRE(system_action("reset", 31));
+    const std::string cmd(g_last_cmd);
+    CHECK(cmd.find("norns-desktop.restart") != std::string::npos);
+    CHECK(cmd.find("kill -TERM " + std::to_string(getpid())) != std::string::npos);
+    CHECK(g_last_unit == nullptr);
+}
+
+TEST_CASE("system_action (desktop): update is not available") {
+    system_cmd_stubs_reset();
+    CHECK_FALSE(system_action("update", 32));
+    CHECK(g_last_cmd == nullptr);
+}
+#endif

@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "events.h"
 #include "sidecar.h"
@@ -142,6 +143,15 @@ typedef struct {
     const char *unit;
 } system_action_t;
 
+#ifdef NORNS_DESKTOP
+// a desktop build is not a dedicated device and has no norns systemd units.
+// SLEEP quits norns; RESET leaves a flag for the launcher (norns-desktop) to
+// relaunch sclang and norns, then quits. %d is the norns pid
+static const system_action_t system_actions[] = {
+    {"shutdown", "kill -TERM %d", NULL},
+    {"reset", "touch \"${XDG_RUNTIME_DIR:-/tmp}/norns-desktop.restart\"; kill -TERM %d", NULL},
+};
+#else
 static const system_action_t system_actions[] = {
     {"shutdown", "sleep 0.5; sudo shutdown now", "norns-shutdown"},
     {"reset", "sudo systemctl restart norns-sclang.service norns-main.service", "norns-reset"},
@@ -155,6 +165,7 @@ static void build_update_cmd(char *buf, size_t len) {
     }
     snprintf(buf, len, "/bin/bash %s/norns/update/update.sh", home);
 }
+#endif
 
 //-------------------------------
 //-- extern function definitions
@@ -199,12 +210,20 @@ bool system_action(const char *action, int cb_ref) {
         if (strcmp(a->name, action) != 0) {
             continue;
         }
+#ifdef NORNS_DESKTOP
+        // no systemd-run: run it like any other command
+        char cmd[512];
+        snprintf(cmd, sizeof(cmd), a->cmd, (int)getpid());
+        return sidecar_client_cmd_async(cmd, SIDECAR_CMD_TIMEOUT_DEFAULT_MS, (void *)(intptr_t)cb_ref, NULL,
+                                        post_launch_done);
+#else
         if (a->cmd != NULL) {
             return system_cmd_detached(a->cmd, a->unit, cb_ref);
         }
         char cmd[512];
         build_update_cmd(cmd, sizeof(cmd));
         return system_cmd_detached(cmd, a->unit, cb_ref);
+#endif
     }
     fprintf(stderr, "system_action: unknown action (%s)\n", action);
     return false;
