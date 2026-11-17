@@ -94,15 +94,19 @@ end
 --
 
 --- true if there is a bluetooth controller.
+-- checks sysfs directly: a shell command here would wait behind any
+-- running scan or connect, blocking the lua thread meanwhile.
 function Bluetooth.available()
-  return util.os_capture("ls /sys/class/bluetooth 2>/dev/null") ~= ""
+  for i = 0, 9 do
+    if util.file_exists("/sys/class/bluetooth/hci" .. i) then return true end
+  end
+  return false
 end
 
 --- add a midi device for every bluetooth midi port, and remove the
 -- devices whose port is gone.
--- @tparam ?string output output of `aconnect -l`, fetched if omitted
+-- @tparam string output output of `aconnect -l`
 function Bluetooth.wire(output)
-  output = output or util.os_capture("aconnect -l", true)
   local ports = parse_ports(output)
   Bluetooth.connected = names(ports)
   local seen = {}
